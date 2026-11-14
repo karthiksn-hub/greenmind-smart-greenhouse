@@ -2,8 +2,13 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { Geist, Geist_Mono } from "next/font/google";
+
+import TopToolbar from "./components/toptoolbar";
+import SelectToSpeak from "./components/select-to-speak";
 import AIFarmerChatbot from "./components/aifarmerchatbot";
+
 import "./globals.css";
+import "./greenmind-full.css";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -16,23 +21,38 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "GreenMind | Smart Agriculture System",
+  title: "GreenMind Smart Agriculture",
   description:
-    "Smart greenhouse monitoring, plant health and AI farming assistant.",
+    "AI-powered smart greenhouse monitoring, plant health tracking and irrigation management.",
+  applicationName: "GreenMind Smart Agriculture",
+  keywords: [
+    "GreenMind",
+    "Smart Agriculture",
+    "Smart Greenhouse",
+    "AI Plant Disease Detection",
+    "Smart Irrigation",
+    "IoT Agriculture",
+  ],
 };
 
 export default function RootLayout({
   children,
-}: {
+}: Readonly<{
   children: ReactNode;
-}) {
+}>) {
   return (
-    <html
-      lang="en"
-      className={`${geistSans.variable} ${geistMono.variable}`}
-    >
-      <body className="min-h-screen">
-        {children}
+    <html lang="en" suppressHydrationWarning>
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} min-h-screen`}
+      >
+        <TopToolbar />
+
+        <SelectToSpeak />
+
+        <main className="gm-site-content">
+          {children}
+        </main>
+
         <AIFarmerChatbot />
       </body>
     </html>

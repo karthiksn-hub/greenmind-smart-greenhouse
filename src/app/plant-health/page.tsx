@@ -11,91 +11,128 @@ const plants = [
 
 export default function PlantHealthPage() {
   return (
-    <main style={{
-      minHeight: "100vh",
-      padding: "35px",
-      background: "#0b172b",
-      color: "#eef5ff",
-      fontFamily: "Arial, sans-serif"
-    }}>
-      <Link href="/" style={{ color: "#54d6a0" }}>← Back to Dashboard</Link>
+    <div className="gm-dashboard">
+      <aside className="gm-side">
+        <Link href="/" className="gm-side-brand">
+          <span className="gm-brand-icon">🌿</span>
+          <span>
+            <strong>GreenMind</strong>
+            <small>SMART GREENHOUSE</small>
+          </span>
+        </Link>
 
-      <h1 style={{ marginTop: 25 }}>🌱 Complete Plant Health</h1>
-      <p style={{ color: "#a7b8d0" }}>
-        Monitor plant condition, health scores and growing environment.
-      </p>
+        <p className="gm-side-label">MENU</p>
 
-      <section style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fit,minmax(190px,1fr))",
-        gap: 18,
-        marginTop: 30
-      }}>
-        {[
-          ["92%", "Overall Plant Health"],
-          ["3", "Plants Monitored"],
-          ["2", "Healthy Plants"],
-          ["1", "Needs Attention"]
-        ].map(([value, label]) => (
-          <article key={label} style={card}>
-            <h2 style={{ fontSize: 34, color: "#54d6a0" }}>{value}</h2>
-            <p>{label}</p>
-          </article>
-        ))}
-      </section>
+        <nav className="gm-side-nav">
+          <Link href="/" className="gm-side-link">
+            <span>▦</span>Overview
+          </Link>
 
-      <h2 style={{ marginTop: 40 }}>Individual Plant Health</h2>
+          <Link href="/plant-health" className="gm-side-link active">
+            <span>🌱</span>Plant Health
+          </Link>
 
-      <section style={{
-        display: "grid",
-        gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))",
-        gap: 18,
-        marginTop: 20
-      }}>
-        {plants.map((plant) => (
-          <article key={plant.name} style={card}>
-            <h3>🌿 {plant.name}</h3>
-            <h2 style={{ fontSize: 35, color: "#54d6a0" }}>
-              {plant.health}%
-            </h2>
-            <div style={{
-              background: "#263851",
-              height: 10,
-              borderRadius: 10,
-              overflow: "hidden"
-            }}>
-              <div style={{
-                width: `${plant.health}%`,
-                height: "100%",
-                background: "#35c991"
-              }} />
-            </div>
-            <p>Status: {plant.status}</p>
-            <p>Water condition: {plant.water}</p>
-          </article>
-        ))}
-      </section>
+          <Link href="/disease-detection" className="gm-side-link">
+            <span>🔬</span>Disease Detection
+          </Link>
 
-      <article style={{ ...card, marginTop: 30 }}>
-        <h2>Plant Care Recommendations</h2>
-        <p>💧 Check soil moisture before watering.</p>
-        <p>☀️ Provide sufficient sunlight for healthy growth.</p>
-        <p>🔍 Inspect leaves regularly for disease symptoms.</p>
-        <p>🌱 Maintain suitable temperature and humidity.</p>
-      </article>
+          <Link href="/irrigation" className="gm-side-link">
+            <span>💧</span>Irrigation
+          </Link>
 
-      <p style={{ color: "#91a4bd", marginTop: 30 }}>
-        Demo plant scores only. Live plant health monitoring will be connected
-        after sensor and plant-analysis integration.
-      </p>
-    </main>
+          {/* NEW: SMART WATER MANAGEMENT */}
+          <Link href="/water-management" className="gm-side-link">
+            <span>🚰</span>Smart Water Management
+          </Link>
+
+          <Link href="/analytics" className="gm-side-link">
+            <span>📊</span>Analytics
+          </Link>
+
+          <Link href="/settings" className="gm-side-link">
+            <span>⚙</span>Settings
+          </Link>
+        </nav>
+
+        <div className="gm-side-bottom">
+          <div className="gm-side-leaf">🌱</div>
+          <strong>GreenMind AI</strong>
+          <p>Growing smarter, greener and healthier.</p>
+        </div>
+      </aside>
+
+      <main className="gm-dashboard-main">
+        <header className="gm-dashboard-header">
+          <div>
+            <p className="gm-breadcrumb">
+              <Link href="/">Greenhouse</Link> / Plant Health
+            </p>
+
+            <h1>🌱 Complete Plant Health</h1>
+
+            <p className="gm-subtitle">
+              Monitor plant condition, health scores and growing environment.
+            </p>
+          </div>
+
+          <Link href="/" className="gm-small-link">
+            ← Back to Dashboard
+          </Link>
+        </header>
+
+        <section className="gm-summary-grid">
+          {[
+            ["92%", "Overall Plant Health"],
+            ["3", "Plants Monitored"],
+            ["2", "Healthy Plants"],
+            ["1", "Needs Attention"],
+          ].map(([value, label]) => (
+            <article className="gm-summary-card" key={label}>
+              <h2>{value}</h2>
+              <p>{label}</p>
+            </article>
+          ))}
+        </section>
+
+        <section className="gm-plant-section">
+          <h2>Individual Plant Health</h2>
+
+          <div className="gm-plant-grid">
+            {plants.map((plant) => (
+              <article className="gm-plant-card" key={plant.name}>
+                <h3>🌿 {plant.name}</h3>
+
+                <strong className="gm-plant-score">
+                  {plant.health}%
+                </strong>
+
+                <div className="gm-plant-progress">
+                  <div style={{ width: `${plant.health}%` }} />
+                </div>
+
+                <p>Status: <strong>{plant.status}</strong></p>
+                <p>Water condition: <strong>{plant.water}</strong></p>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        <section className="gm-care-card">
+          <h2>Plant Care Recommendations</h2>
+
+          <ul>
+            <li>💧 Check soil moisture before watering.</li>
+            <li>☀️ Provide sufficient sunlight for healthy growth.</li>
+            <li>🔍 Inspect leaves regularly for disease symptoms.</li>
+            <li>🌱 Maintain suitable temperature and humidity.</li>
+          </ul>
+        </section>
+
+        <p className="gm-demo-note gm-page-note">
+          Demo plant scores only. Live plant health monitoring will be
+          connected after sensor and plant-analysis integration.
+        </p>
+      </main>
+    </div>
   );
 }
-
-const card: React.CSSProperties = {
-  background: "#12233c",
-  border: "1px solid #294362",
-  borderRadius: 16,
-  padding: 22
-};
-
