@@ -31,25 +31,28 @@ export default function SelectToSpeak() {
       if (!rect.width && !rect.height) return;
 
       setSelectedText(text);
+
       setPosition({
         x: Math.max(
           100,
-          Math.min(rect.left + rect.width / 2, window.innerWidth - 100)
+          Math.min(
+            rect.left + rect.width / 2,
+            window.innerWidth - 100
+          )
         ),
         y: Math.max(10, rect.top - 50),
       });
     }
 
     function handleOutsideClick(event: MouseEvent) {
-      const target = event.target as HTMLElement;
+      const target = event.target;
+
+      if (!(target instanceof HTMLElement)) return;
 
       if (target.closest(".gm-select-speak")) return;
 
-      // Stop speaking whenever the user clicks elsewhere.
       window.speechSynthesis?.cancel();
       setSpeaking(false);
-
-      // Preserve text if the user clicks the Listen popup.
       setSelectedText("");
     }
 
@@ -61,6 +64,7 @@ export default function SelectToSpeak() {
       document.removeEventListener("mouseup", handleSelection);
       document.removeEventListener("keyup", handleSelection);
       document.removeEventListener("mousedown", handleOutsideClick);
+
       window.speechSynthesis?.cancel();
     };
   }, []);
@@ -91,16 +95,18 @@ export default function SelectToSpeak() {
       ".disease-result, [data-disease-result]"
     );
 
-    if (!diseaseSection) {
+    if (!(diseaseSection instanceof HTMLElement)) {
       alert(
         "No disease result found. Add the data-disease-result attribute to your disease results container."
       );
       return;
     }
 
-    const solution = (diseaseSection as HTMLElement).innerText.trim();
+    const solution = diseaseSection.innerText.trim();
 
-    if (solution) speakText(solution);
+    if (solution) {
+      speakText(solution);
+    }
   }
 
   if (!selectedText) return null;
