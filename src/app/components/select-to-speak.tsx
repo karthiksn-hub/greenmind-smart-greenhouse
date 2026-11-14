@@ -98,7 +98,7 @@ export default function SelectToSpeak() {
       return;
     }
 
-    const solution = diseaseSection.innerText.trim();
+    const solution = (diseaseSection as HTMLElement).innerText.trim();
 
     if (solution) speakText(solution);
   }
