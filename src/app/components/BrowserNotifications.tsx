@@ -1,210 +1,268 @@
 
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { supabase } from "../../lib/supabase";
-const DEVICE_ID = "greenhouse-esp32-s3-01";
-const CHECK_INTERVAL = 10000;
-const ONLINE_TIMEOUT = 30000;
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useGreenhouseMode } from "./GreenhouseModeProvider";
 
-type Reading = {
-  temperature_c: number | null;
-  soil_moisture_percent: number | null;
-  humidity_percent: number | null;
-  created_at: string;
+type TestScenario =
+  | "normal"
+  | "critical-soil"
+  | "low-soil"
+  | "high-temperature"
+  | "high-humidity"
+  | "offline";
+
+type Props = {
+  testScenario?: TestScenario;
 };
 
 type AlertItem = {
-  id: string;
+  key: string;
   title: string;
   message: string;
 };
 
-export default function BrowserNotifications() {
-  const [permission, setPermission] =
-    useState<NotificationPermission | "unsupported">("default");
-  const [enabled, setEnabled] = useState(false);
-  const [status, setStatus] = useState("Notifications are disabled.");
+export default function BrowserNotifications({
+  testScenario = "normal",
+}: Props) {
+  const {
+    telemetry,
+    simulationMode,
+    deviceOnline,
+  } = useGreenhouseMode();
 
-  const previousAlerts = useRef<Set<string>>(new Set());
-  const initialized = useRef(false);
+  const [permission, setPermission] = useState<
+    NotificationPermission | "unsupported"
+  >("default");
 
+  const previousAlerts = useRef<string>("");
+
+  // DETECT REAL AND TEST ALERTS
+  const alerts = useMemo<AlertItem[]>(() => {
+    if (testScenario !== "normal") {
+      const testAlerts: Record<
+        Exclude<TestScenario, "normal">,
+        AlertItem
+      > = {
+        "critical-soil": {
+          key: "test-critical-soil",
+          title: "TEST: Critical Soil Moisture",
+          message: "Test reading: Soil moisture is 15%.",
+        },
+
+        "low-soil": {
+          key: "test-low-soil",
+          title: "TEST: Low Soil Moisture",
+          message: "Test reading: Soil moisture is 25%.",
+        },
+
+        "high-temperature": {
+          key: "test-high-temperature",
+          title: "TEST: High Temperature",
+          message: "Test reading: Greenhouse temperature is 38°C.",
+        },
+
+        "high-humidity": {
+          key: "test-high-humidity",
+          title: "TEST: High Humidity",
+          message: "Test reading: Greenhouse humidity is 88%.",
+        },
+
+        offline: {
+          key: "test-esp32-offline",
+          title: "TEST: ESP32 Offline",
+          message: "Test condition: The ESP32 device is offline.",
+        },
+      };
+
+      return [testAlerts[testScenario]];
+    }
+
+    const result: AlertItem[] = [];
+
+    if (!telemetry) return result;
+
+    if (!simulationMode && !deviceOnline) {
+      result.push({
+        key: "esp32-offline",
+        title: "ESP32 Device Offline",
+        message:
+          "No fresh greenhouse sensor data has arrived. Check the ESP32 and Wi-Fi connection.",
+      });
+
+      return result;
+    }
+
+    const soil = telemetry.soil_moisture_percent;
+    const temperature = telemetry.temperature_c;
+    const humidity = telemetry.humidity_percent;
+
+    if (soil !== null && Number.isFinite(Number(soil))) {
+      const value = Number(soil);
+
+      if (value <= 20) {
+        result.push({
+          key: "critical-soil",
+          title: "Critical Soil Moisture",
+          message: `Soil moisture is ${value.toFixed(1)}%. Check the soil immediately.`,
+        });
+      } else if (value <= 30) {
+        result.push({
+          key: "low-soil",
+          title: "Low Soil Moisture",
+          message: `Soil moisture is ${value.toFixed(1)}%. Check watering requirements.`,
+        });
+      }
+    }
+
+    if (
+      temperature !== null &&
+      Number.isFinite(Number(temperature)) &&
+      Number(temperature) >= 35
+    ) {
+      result.push({
+        key: "high-temperature",
+        title: "High Greenhouse Temperature",
+        message: `Temperature is ${Number(temperature).toFixed(1)}°C. Check ventilation.`,
+      });
+    }
+
+    if (
+      humidity !== null &&
+      Number.isFinite(Number(humidity)) &&
+      Number(humidity) > 80
+    ) {
+      result.push({
+        key: "high-humidity",
+        title: "High Greenhouse Humidity",
+        message: `Humidity is ${Number(humidity).toFixed(1)}%. Monitor ventilation.`,
+      });
+    }
+
+    return result;
+  }, [
+    telemetry,
+    simulationMode,
+    deviceOnline,
+    testScenario,
+  ]);
+
+  // CHECK BROWSER NOTIFICATION SUPPORT
   useEffect(() => {
+    if (typeof window === "undefined") return;
+
     if (!("Notification" in window)) {
       setPermission("unsupported");
-      setStatus("This browser does not support notifications.");
       return;
     }
 
     setPermission(Notification.permission);
-    setEnabled(Notification.permission === "granted");
   }, []);
 
-  const enableNotifications = useCallback(async () => {
+  // REQUEST PERMISSION
+  async function enableNotifications() {
     if (!("Notification" in window)) {
-      setStatus("Browser notifications are not supported.");
+      setPermission("unsupported");
       return;
     }
 
-    const result = await Notification.requestPermission();
-
-    setPermission(result);
-    setEnabled(result === "granted");
-
-    if (result === "granted") {
-      setStatus("Browser notifications enabled.");
-      new Notification("GreenMind Smart Agriculture", {
-        body: "You will receive greenhouse alerts in this browser.",
-      });
-    } else {
-      setStatus("Notification permission was not granted.");
+    try {
+      const result = await Notification.requestPermission();
+      setPermission(result);
+    } catch (error) {
+      console.error("Notification permission error:", error);
+      setPermission("default");
     }
-  }, []);
+  }
 
-  const checkAlerts = useCallback(async () => {
-    if (
-      !("Notification" in window) ||
-      Notification.permission !== "granted"
-    ) return;
-
-    const { data, error } = await supabase
-      .from("greenhouse_telemetry")
-      .select(
-        "temperature_c, soil_moisture_percent, humidity_percent, created_at"
-      )
-      .eq("device_id", DEVICE_ID)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (error) {
-      setStatus("Unable to check greenhouse readings.");
-      return;
-    }
-
-    const alerts: AlertItem[] = [];
-
-    if (!data) {
-      alerts.push({
-        id: "waiting",
-        title: "Greenhouse data unavailable",
-        message: "Waiting for the first ESP32 sensor reading.",
-      });
-    } else {
-      const reading = data as Reading;
-      const age = Date.now() - new Date(reading.created_at).getTime();
-
-      if (age < 0 || age > ONLINE_TIMEOUT) {
-        alerts.push({
-          id: "offline",
-          title: "ESP32 disconnected",
-          message: "No recent greenhouse sensor reading was received.",
-        });
-      } else {
-        const soil = reading.soil_moisture_percent;
-        const temperature = reading.temperature_c;
-        const humidity = reading.humidity_percent;
-
-        if (soil !== null && soil <= 20) {
-          alerts.push({
-            id: "soil-critical",
-            title: "Critical soil moisture",
-            message: `Soil moisture is ${soil}%. Check irrigation.`,
-          });
-        } else if (soil !== null && soil <= 30) {
-          alerts.push({
-            id: "soil-low",
-            title: "Low soil moisture",
-            message: `Soil moisture is ${soil}%.`,
-          });
-        }
-
-        if (temperature !== null && temperature >= 35) {
-          alerts.push({
-            id: "high-temperature",
-            title: "High greenhouse temperature",
-            message: `Temperature is ${temperature}°C.`,
-          });
-        }
-
-        if (humidity !== null && humidity > 80) {
-          alerts.push({
-            id: "high-humidity",
-            title: "High greenhouse humidity",
-            message: `Humidity is ${humidity}%.`,
-          });
-        }
-      }
-    }
-
-    const currentIds = new Set(alerts.map((alert) => alert.id));
-
-    if (initialized.current) {
-      alerts.forEach((alert) => {
-        if (!previousAlerts.current.has(alert.id)) {
-          new Notification(alert.title, {
-            body: alert.message,
-            tag: alert.id,
-          });
-        }
-      });
-    }
-
-    previousAlerts.current = currentIds;
-    initialized.current = true;
-    setStatus("Greenhouse alerts checked successfully.");
-  }, []);
-
+  // SEND NEW ALERTS ONLY
   useEffect(() => {
-    if (!enabled) return;
+    if (permission !== "granted") return;
 
-    void checkAlerts();
+    const currentKeys = alerts
+      .map((alert) => alert.key)
+      .sort()
+      .join("|");
 
-    const interval = window.setInterval(() => {
-      void checkAlerts();
-    }, CHECK_INTERVAL);
+    // Initialize without notifying for existing conditions.
+    if (previousAlerts.current === "") {
+      previousAlerts.current = currentKeys;
+      return;
+    }
 
-    return () => window.clearInterval(interval);
-  }, [enabled, checkAlerts]);
+    const previousKeys = previousAlerts.current
+      ? previousAlerts.current.split("|")
+      : [];
+
+    const newAlerts = alerts.filter(
+      (alert) => !previousKeys.includes(alert.key)
+    );
+
+    previousAlerts.current = currentKeys;
+
+    newAlerts.forEach((alert) => {
+      try {
+        const notification = new Notification(
+          `GreenMind: ${alert.title}`,
+          {
+            body: alert.message,
+            tag: `greenmind-${alert.key}`,
+            icon: "/favicon.ico",
+          }
+        );
+
+        notification.onclick = () => {
+          window.focus();
+          notification.close();
+        };
+      } catch (error) {
+        console.error("Browser notification error:", error);
+      }
+    });
+  }, [alerts, permission]);
 
   return (
-    <section className="browser-notification-card">
-      <div className="browser-notification-heading">
-        <div>
-          <h2>Browser Notifications</h2>
-          <p>Receive alerts from your greenhouse in this browser.</p>
-        </div>
-
-        <span className={
-          enabled
-            ? "browser-notification-status active"
-            : "browser-notification-status"
-        }>
-          {enabled ? "ENABLED" : "DISABLED"}
+    <section className="gm-browser-notification">
+      <div className="gm-browser-notification-info">
+        <span className="gm-browser-notification-icon">
+          🔔
         </span>
+
+        <div>
+          <strong>Browser Notifications</strong>
+
+          <p>
+            Receive alerts when greenhouse sensor conditions need attention.
+          </p>
+
+          <small>
+            {permission === "granted"
+              ? "Notifications enabled"
+              : permission === "denied"
+                ? "Notifications blocked in browser settings"
+                : permission === "unsupported"
+                  ? "Browser notifications are not supported"
+                  : "Permission is required to receive notifications"}
+          </small>
+        </div>
       </div>
 
-      <p className="browser-notification-message">{status}</p>
+      {permission !== "granted" &&
+        permission !== "unsupported" && (
+          <button
+            type="button"
+            onClick={enableNotifications}
+            className="gm-notification-enable"
+          >
+            Enable Notifications
+          </button>
+        )}
 
-      {permission === "unsupported" ? (
-        <p>This browser does not support notifications.</p>
-      ) : permission === "denied" ? (
-        <p>Enable notifications in your browser site settings.</p>
-      ) : (
-        <button
-          type="button"
-          onClick={enableNotifications}
-          disabled={enabled}
-          className="browser-notification-button"
-        >
-          {enabled ? "Notifications Enabled" : "Enable Notifications"}
-        </button>
+      {permission === "granted" && (
+        <span className="gm-notification-enabled">
+          ✓ Enabled
+        </span>
       )}
-
-      <p className="browser-notification-note">
-        Notifications use actual Supabase sensor readings. No simulated
-        readings are generated.
-      </p>
     </section>
   );
 }

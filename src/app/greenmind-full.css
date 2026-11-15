@@ -2901,3 +2901,192 @@ html::before {
   }
 
 }
+/* GREENMIND MASTER MODE SWITCH */
+
+.gm-master-mode {
+  position: fixed;
+  top: 90px;
+  right: 22px;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding: 13px 17px;
+  min-width: 265px;
+  background: var(--card, #17221e);
+  color: var(--foreground, #ffffff);
+  border: 1px solid var(--border, #34443b);
+  border-radius: 16px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.16);
+}
+
+.gm-master-mode-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.gm-master-mode-label {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 1px;
+  opacity: 0.65;
+}
+
+.gm-master-mode-info strong {
+  font-size: 14px;
+}
+
+.gm-master-mode-info small {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.gm-master-mode-error {
+  color: #ef4444;
+}
+
+.gm-master-toggle {
+  width: 54px;
+  height: 30px;
+  flex-shrink: 0;
+  padding: 3px;
+  border: 0;
+  border-radius: 30px;
+  cursor: pointer;
+  transition: background 0.25s ease;
+}
+
+.gm-master-toggle.simulation {
+  background: #16a34a;
+}
+
+.gm-master-toggle.hardware {
+  background: #2563eb;
+}
+
+.gm-master-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.gm-master-toggle-knob {
+  display: block;
+  width: 24px;
+  height: 24px;
+  background: white;
+  border-radius: 50%;
+  transition: transform 0.25s ease;
+}
+
+.gm-master-toggle.simulation .gm-master-toggle-knob {
+  transform: translateX(24px);
+}
+
+.gm-master-toggle.hardware .gm-master-toggle-knob {
+  transform: translateX(0);
+}
+
+@media (max-width: 600px) {
+  .gm-master-mode {
+    top: auto;
+    right: 12px;
+    bottom: 15px;
+    min-width: 245px;
+  }
+}
+/* MASTER SIMULATION MODE - TOOLBAR */
+
+.gm-toolbar-inner .gm-master-mode {
+  position: relative;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  min-width: auto;
+  min-height: 60px;
+  padding: 10px 16px;
+  background: transparent;
+  border: 1px solid var(--border, #34443b);
+  border-radius: 15px;
+  box-shadow: none;
+}
+
+.gm-master-mode-label {
+  color: var(--foreground, #ffffff);
+  font-size: 14px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.gm-master-toggle {
+  width: 54px;
+  height: 30px;
+  flex-shrink: 0;
+  padding: 3px;
+  border: none;
+  border-radius: 30px;
+  cursor: pointer;
+  transition: background 0.25s ease;
+}
+
+.gm-master-toggle.simulation {
+  background: #16a34a;
+}
+
+.gm-master-toggle.hardware {
+  background: #2563eb;
+}
+
+.gm-master-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.gm-master-toggle-knob {
+  display: block;
+  width: 24px;
+  height: 24px;
+  background: #ffffff;
+  border-radius: 50%;
+  transition: transform 0.25s ease;
+}
+
+.gm-master-toggle.simulation .gm-master-toggle-knob {
+  transform: translateX(24px);
+}
+
+.gm-master-toggle.hardware .gm-master-toggle-knob {
+  transform: translateX(0);
+}
+
+.gm-master-mode-error {
+  color: #ef4444;
+  font-size: 11px;
+}
+
+.gm-mode-loading {
+  font-size: 11px;
+  color: var(--text-secondary, #94a3b8);
+}
+
+@media (max-width: 900px) {
+  .gm-toolbar-inner {
+    flex-wrap: wrap;
+  }
+}
+
+@media (max-width: 600px) {
+  .gm-toolbar-inner .gm-master-mode {
+    min-height: 48px;
+    padding: 7px 10px;
+  }
+
+  .gm-master-mode-label {
+    font-size: 12px;
+  }
+}

@@ -1,110 +1,160 @@
-
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useGreenhouseMode } from "./GreenhouseModeProvider";
 
-const CHECK_INTERVAL = 60000;
+type EmailStatus = "idle" | "checking" | "success" | "error";
+
+type EmailApiResponse = {
+  success?: boolean;
+  mode?: string;
+  message?: string;
+  results?: Array<{
+    alert: string;
+    result: string;
+  }>;
+};
+
+const CHECK_INTERVAL = 2 * 60 * 1000;
 
 export default function EmailAlertMonitor() {
-  const [status, setStatus] = useState("Waiting to check email alerts...");
-  const [lastChecked, setLastChecked] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
+  const { simulationMode } = useGreenhouseMode();
 
-  async function checkEmailAlerts() {
-    if (loading) return;
+  const [status, setStatus] = useState<EmailStatus>("idle");
+  const [message, setMessage] = useState(
+    "Gmail monitoring is ready."
+  );
+  const [lastChecked, setLastChecked] = useState("Not checked yet");
 
-    setLoading(true);
+  const requestRunning = useRef(false);
+
+  const checkEmailAlerts = useCallback(async () => {
+    if (simulationMode || requestRunning.current) return;
+
+    requestRunning.current = true;
+    setStatus("checking");
+    setMessage("Checking greenhouse conditions...");
 
     try {
       const response = await fetch("/api/email-alerts", {
         method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
         cache: "no-store",
       });
 
-      const result = await response.json();
+      const data = (await response.json()) as EmailApiResponse;
 
-      if (!response.ok || !result.success) {
-        throw new Error(result.message || "Email check failed.");
+      setLastChecked(new Date().toLocaleString());
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || "Gmail alert check failed.");
       }
 
-      if (result.mode === "waiting") {
-        setStatus("Waiting for actual ESP32 readings. No email sent.");
-      } else if (result.mode === "normal") {
-        setStatus("No active email alert conditions.");
-      } else {
-        const sent = result.results?.filter(
-          (item: { result: string }) => item.result === "sent"
-        ).length ?? 0;
-
-        const cooldown = result.results?.filter(
-          (item: { result: string }) => item.result === "cooldown"
-        ).length ?? 0;
-
-        setStatus(
-          `${sent} email(s) sent. ${cooldown} alert(s) within cooldown.`
+      if (data.mode === "waiting") {
+        setMessage(
+          "Waiting for the first ESP32 reading. No Gmail alert sent."
         );
+      } else if (data.mode === "normal") {
+        setMessage(
+          "Greenhouse conditions are normal. No Gmail alert required."
+        );
+      } else if (data.results?.length) {
+        const sent = data.results.filter(
+          (item) => item.result === "sent"
+        ).length;
+
+        const cooldown = data.results.filter(
+          (item) => item.result === "cooldown"
+        ).length;
+
+        setMessage(
+          `Alert check completed. ${sent} Gmail alert(s) sent; ${cooldown} alert(s) are within cooldown.`
+        );
+      } else {
+        setMessage(data.message || "Gmail alert check completed.");
       }
 
-      setLastChecked(new Date().toLocaleTimeString());
+      setStatus("success");
     } catch (error) {
-      setStatus(
-        error instanceof Error ? error.message : "Email check failed."
+      setStatus("error");
+      setMessage(
+        error instanceof Error
+          ? error.message
+          : "Unable to check Gmail alerts."
       );
     } finally {
-      setLoading(false);
+      requestRunning.current = false;
     }
-  }
+  }, [simulationMode]);
 
   useEffect(() => {
+    if (simulationMode) {
+      setStatus("idle");
+      setMessage(
+        "Simulation Mode: Gmail sending is disabled. Switch to real ESP32 mode to monitor Gmail alerts."
+      );
+      return;
+    }
+
+    // Check immediately when real mode starts.
     void checkEmailAlerts();
 
+    // Then check every 2 minutes.
     const interval = window.setInterval(() => {
       void checkEmailAlerts();
     }, CHECK_INTERVAL);
 
     return () => window.clearInterval(interval);
-  }, []);
+  }, [simulationMode, checkEmailAlerts]);
 
   return (
-    <section
-      style={{
-        padding: 22,
-        margin: "20px 0",
-        border: "1px solid var(--border, #ddd)",
-        borderRadius: 16,
-        background: "var(--card, #fff)",
-        color: "var(--foreground, #171717)",
-      }}
-    >
-      <h2 style={{ marginTop: 0 }}>Automated Email Alerts</h2>
+    <section className="gm-email-monitor">
+      <div className="gm-email-monitor-heading">
+        <div>
+          <span className="gm-email-monitor-icon">✉️</span>
 
-      <p>
-        Receive email alerts for critical soil moisture, high temperature
-        and ESP32 disconnection.
-      </p>
+          <div>
+            <strong>Gmail Alert Monitoring</strong>
+            <p>Automatic greenhouse Gmail notifications</p>
+          </div>
+        </div>
 
-      <p aria-live="polite">{status}</p>
+        <span className={`gm-email-status ${status}`}>
+          {simulationMode
+            ? "SIMULATION"
+            : status === "checking"
+              ? "CHECKING"
+              : status === "error"
+                ? "ERROR"
+                : status === "success"
+                  ? "ACTIVE"
+                  : "READY"}
+        </span>
+      </div>
 
-      <button
-        type="button"
-        onClick={() => void checkEmailAlerts()}
-        disabled={loading}
-        style={{
-          padding: "10px 16px",
-          border: 0,
-          borderRadius: 8,
-          background: "#166534",
-          color: "#fff",
-          cursor: loading ? "wait" : "pointer",
-        }}
-      >
-        {loading ? "Checking..." : "Check Email Alerts"}
-      </button>
+      <p className="gm-email-message">{message}</p>
 
-      <p style={{ fontSize: 12, opacity: 0.7, marginBottom: 0 }}>
-        Automatic check interval: 60 seconds.
-        {lastChecked ? ` Last checked: ${lastChecked}` : ""}
-      </p>
+      <div className="gm-email-footer">
+        <span>Last check: {lastChecked}</span>
+
+        {!simulationMode && (
+          <button
+            type="button"
+            onClick={() => void checkEmailAlerts()}
+            disabled={status === "checking"}
+          >
+            {status === "checking" ? "Checking..." : "Check Now"}
+          </button>
+        )}
+      </div>
+
+      {!simulationMode && (
+        <p className="gm-email-interval">
+          Automatic monitoring: Every 2 minutes
+        </p>
+      )}
     </section>
   );
 }

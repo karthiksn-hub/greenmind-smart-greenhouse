@@ -1,5 +1,5 @@
-
 import { NextResponse } from "next/server";
+import * as nodemailer from "nodemailer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -10,6 +10,7 @@ const ONLINE_TIMEOUT_SECONDS = 30;
 
 type Telemetry = {
   temperature_c: number | null;
+  humidity_percent: number | null;
   soil_moisture_percent: number | null;
   created_at: string;
 };
@@ -23,19 +24,21 @@ type Alert = {
 function getConfig() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  const resendKey = process.env.RESEND_API_KEY;
-  const from = process.env.ALERT_FROM_EMAIL;
-  const to = process.env.ALERT_TO_EMAIL;
+  const gmailUser = process.env.GMAIL_USER;
+  const gmailPassword = process.env.GMAIL_APP_PASSWORD;
+  const to = process.env.ALERT_TO_EMAIL || gmailUser;
 
-  if (!url || !serviceKey || !resendKey || !from || !to) {
-    throw new Error("Email alert environment variables are missing.");
+  if (!url || !serviceKey || !gmailUser || !gmailPassword || !to) {
+    throw new Error(
+      "Missing configuration. Check Supabase and Gmail environment variables."
+    );
   }
 
   return {
     url: url.replace(/\/$/, ""),
     serviceKey,
-    resendKey,
-    from,
+    gmailUser,
+    gmailPassword,
     to,
   };
 }
@@ -61,13 +64,16 @@ async function sendAlert(
   alert: Alert,
   config: ReturnType<typeof getConfig>
 ) {
+  // Check the existing 60-minute cooldown.
   const stateResponse = await supabaseRequest(
-    `greenhouse_email_alert_state?select=last_sent_at&alert_key=eq.${encodeURIComponent(alert.key)}&limit=1`,
+    `greenhouse_email_alert_state?select=last_sent_at&alert_key=eq.${encodeURIComponent(
+      alert.key
+    )}&limit=1`,
     config
   );
 
   if (!stateResponse.ok) {
-    throw new Error("Could not check email alert cooldown.");
+    throw new Error("Could not check Gmail alert cooldown.");
   }
 
   const states = (await stateResponse.json()) as Array<{
@@ -84,38 +90,37 @@ async function sendAlert(
     return "cooldown";
   }
 
-  const emailResponse = await fetch(
-    "https://api.resend.com/emails",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.resendKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        from: config.from,
-        to: [config.to],
-        subject: alert.subject,
-        text: [
-          "GREENMIND SMART AGRICULTURE",
-          "",
-          alert.message,
-          "",
-          `Time: ${new Date().toLocaleString("en-IN", {
-            timeZone: "Asia/Kolkata",
-          })}`,
-          "",
-          "This alert was generated from greenhouse telemetry.",
-        ].join("\n"),
-      }),
-    }
-  );
+  // Gmail SMTP connection.
+  const transporter = nodemailer.createTransport({
+    host: "smtp.gmail.com",
+    port: 465,
+    secure: true,
+    auth: {
+      user: config.gmailUser,
+      pass: config.gmailPassword,
+    },
+  });
 
-  if (!emailResponse.ok) {
-    const detail = await emailResponse.text();
-    throw new Error(`Email provider error: ${detail}`);
-  }
+  const timestamp = new Date().toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+  });
 
+  await transporter.sendMail({
+    from: `"GreenMind Smart Agriculture" <${config.gmailUser}>`,
+    to: config.to,
+    subject: alert.subject,
+    text: [
+      "GREENMIND SMART AGRICULTURE",
+      "",
+      alert.message,
+      "",
+      `Time: ${timestamp}`,
+      "",
+      "This alert was generated automatically from greenhouse telemetry.",
+    ].join("\n"),
+  });
+
+  // Save cooldown only after Gmail successfully sends the message.
   const saveResponse = await supabaseRequest(
     "greenhouse_email_alert_state?on_conflict=alert_key",
     config,
@@ -133,7 +138,7 @@ async function sendAlert(
 
   if (!saveResponse.ok) {
     throw new Error(
-      "Email sent, but cooldown state could not be saved."
+      "Gmail sent the alert, but the cooldown state could not be saved."
     );
   }
 
@@ -143,7 +148,9 @@ async function sendAlert(
 export async function GET() {
   return NextResponse.json({
     success: true,
-    message: "Greenhouse email alert API is ready.",
+    message: "GreenMind Gmail alert API is ready.",
+    monitoringInterval: "2 minutes",
+    alertCooldown: "60 minutes",
   });
 }
 
@@ -151,8 +158,11 @@ export async function POST() {
   try {
     const config = getConfig();
 
+    // Get the latest real ESP32 reading.
     const telemetryResponse = await supabaseRequest(
-      `greenhouse_telemetry?select=temperature_c,soil_moisture_percent,created_at&device_id=eq.${encodeURIComponent(DEVICE_ID)}&order=created_at.desc&limit=1`,
+      `greenhouse_telemetry?select=temperature_c,humidity_percent,soil_moisture_percent,created_at&device_id=eq.${encodeURIComponent(
+        DEVICE_ID
+      )}&order=created_at.desc&limit=1`,
       config
     );
 
@@ -168,7 +178,7 @@ export async function POST() {
       return NextResponse.json({
         success: true,
         mode: "waiting",
-        message: "Waiting for the first ESP32 reading. No email sent.",
+        message: "Waiting for the first ESP32 reading. No Gmail alert sent.",
       });
     }
 
@@ -178,32 +188,51 @@ export async function POST() {
 
     const alerts: Alert[] = [];
 
+    // Alert if the ESP32 has stopped sending fresh readings.
     if (ageSeconds < 0 || ageSeconds > ONLINE_TIMEOUT_SECONDS) {
       alerts.push({
         key: "esp32-offline",
-        subject: "GreenMind: ESP32 offline",
+        subject: "GreenMind: ESP32 disconnected",
         message:
-          "The greenhouse has not received a fresh ESP32 reading within 30 seconds. Check the device, Wi-Fi and Supabase connection.",
+          `No fresh ESP32 reading has been received for ${Math.max(
+            ageSeconds,
+            0
+          )} seconds. Check the ESP32 device, Wi-Fi and Supabase connection.`,
       });
     } else {
-      const soil = reading.soil_moisture_percent;
-      const temperature = reading.temperature_c;
+      const soil = Number(reading.soil_moisture_percent);
+      const temperature = Number(reading.temperature_c);
+      const humidity = Number(reading.humidity_percent);
 
+      // 1. Critical soil moisture: 20% or below.
       if (
-        soil !== null &&
-        Number.isFinite(Number(soil)) &&
+        reading.soil_moisture_percent !== null &&
+        Number.isFinite(soil) &&
         soil <= 20
       ) {
         alerts.push({
           key: "critical-soil-moisture",
           subject: "GreenMind: Critical soil moisture",
-          message: `Soil moisture is ${soil}%. Inspect the soil and check whether watering is required.`,
+          message: `Soil moisture is ${soil}%. Immediate attention is required. Check the soil and watering system.`,
+        });
+      }
+      // 2. Low soil moisture: above 20% and 30% or below.
+      else if (
+        reading.soil_moisture_percent !== null &&
+        Number.isFinite(soil) &&
+        soil <= 30
+      ) {
+        alerts.push({
+          key: "low-soil-moisture",
+          subject: "GreenMind: Low soil moisture",
+          message: `Soil moisture is ${soil}%. Check whether the plants need watering.`,
         });
       }
 
+      // 3. High temperature: 35°C or above.
       if (
-        temperature !== null &&
-        Number.isFinite(Number(temperature)) &&
+        reading.temperature_c !== null &&
+        Number.isFinite(temperature) &&
         temperature >= 35
       ) {
         alerts.push({
@@ -212,20 +241,34 @@ export async function POST() {
           message: `Greenhouse temperature is ${temperature}°C. Check ventilation and plant condition.`,
         });
       }
+
+      // 4. High humidity: above 80%.
+      if (
+        reading.humidity_percent !== null &&
+        Number.isFinite(humidity) &&
+        humidity > 80
+      ) {
+        alerts.push({
+          key: "high-humidity",
+          subject: "GreenMind: High greenhouse humidity",
+          message: `Greenhouse humidity is ${humidity}%. Check ventilation and monitor the plants for fungal disease risk.`,
+        });
+      }
     }
 
     if (alerts.length === 0) {
       return NextResponse.json({
         success: true,
         mode: "normal",
-        message: "No configured email alert conditions detected.",
+        message: "Greenhouse conditions are normal. No Gmail alert required.",
       });
     }
 
-    const results = [];
+    const results: Array<{ alert: string; result: string }> = [];
 
     for (const alert of alerts) {
       const result = await sendAlert(alert, config);
+
       results.push({
         alert: alert.key,
         result,
@@ -238,7 +281,7 @@ export async function POST() {
       results,
     });
   } catch (error) {
-    console.error("Greenhouse email alert error:", error);
+    console.error("GreenMind Gmail alert error:", error);
 
     return NextResponse.json(
       {
@@ -246,7 +289,7 @@ export async function POST() {
         message:
           error instanceof Error
             ? error.message
-            : "Unable to process email alerts.",
+            : "Unable to process Gmail alerts.",
       },
       { status: 500 }
     );

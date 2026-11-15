@@ -6,6 +6,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import TopToolbar from "./components/toptoolbar";
 import SelectToSpeak from "./components/select-to-speak";
 import AIFarmerChatbot from "./components/aifarmerchatbot";
+import { GreenhouseModeProvider } from "./components/GreenhouseModeProvider";
 
 import "./globals.css";
 import "./greenmind-full.css";
@@ -45,15 +46,17 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} min-h-screen`}
       >
-        <TopToolbar />
+        <GreenhouseModeProvider>
+          <TopToolbar />
 
-        <SelectToSpeak />
+          <SelectToSpeak />
 
-        <main className="gm-site-content">
-          {children}
-        </main>
+          <main className="gm-site-content">
+            {children}
+          </main>
 
-        <AIFarmerChatbot />
+          <AIFarmerChatbot />
+        </GreenhouseModeProvider>
       </body>
     </html>
   );

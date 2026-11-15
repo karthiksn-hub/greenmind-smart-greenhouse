@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useGreenhouseMode } from "../components/GreenhouseModeProvider";
 import "./energy.css";
 
 type EnergyReading = {
@@ -13,13 +13,16 @@ type EnergyReading = {
   created_at: string;
 };
 
-type EnergyResponse = {
-  success: boolean;
-  mode?: "live" | "stale" | "waiting";
-  message?: string;
-  ageSeconds?: number | null;
-  telemetry?: EnergyReading | null;
-  history?: EnergyReading[];
+type ExtendedTelemetry = {
+  device_id?: string | null;
+  voltage_v?: number | null;
+  current_a?: number | null;
+  power_w?: number | null;
+  energy_wh?: number | null;
+  created_at: string;
+  pump_on?: boolean;
+  fan_on?: boolean;
+  grow_light_on?: boolean;
 };
 
 function formatDate(value?: string | null) {
@@ -32,69 +35,100 @@ function formatDate(value?: string | null) {
     : date.toLocaleString();
 }
 
-function formatNumber(value: number | null | undefined, unit: string) {
+function formatNumber(
+  value: number | null | undefined,
+  unit: string
+) {
   return typeof value === "number" && Number.isFinite(value)
-    ? `${value} ${unit}`
+    ? `${value.toFixed(2)} ${unit}`
     : "--";
 }
 
+function getSimulatedEnergy(item: ExtendedTelemetry): EnergyReading {
+  const voltage = 12;
+
+  // Illustrative electrical loads for the demonstration.
+  const current =
+    0.15 +
+    (item.pump_on ? 0.8 : 0) +
+    (item.fan_on ? 0.35 : 0) +
+    (item.grow_light_on ? 0.45 : 0);
+
+  const power = voltage * current;
+
+  return {
+    device_id: "SIMULATOR",
+    voltage_v: voltage,
+    current_a: Number(current.toFixed(2)),
+    power_w: Number(power.toFixed(2)),
+    energy_wh: Number((power * 1.5).toFixed(2)),
+    created_at: item.created_at,
+  };
+}
+
 export default function EnergyPage() {
-  const [data, setData] = useState<EnergyResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState("");
-  const [lastChecked, setLastChecked] = useState("");
+  const {
+    simulationMode,
+    loading,
+    changing,
+    error,
+    telemetry,
+    recentTelemetry,
+    deviceOnline,
+    refreshTelemetry,
+  } = useGreenhouseMode();
 
-  const loadEnergy = useCallback(async (manual = false) => {
-    if (manual) setRefreshing(true);
+  const extendedTelemetry = telemetry as
+    | (typeof telemetry & ExtendedTelemetry)
+    | null;
 
-    try {
-      const response = await fetch("/api/energy", {
-        cache: "no-store",
-      });
+  const simulatedReading = extendedTelemetry
+    ? getSimulatedEnergy(extendedTelemetry)
+    : null;
 
-      const result: EnergyResponse = await response.json();
-
-      if (!response.ok || !result.success) {
-        throw new Error(
-          result.message || "Unable to load energy readings."
-        );
+  const realReading: EnergyReading | null = extendedTelemetry
+    ? {
+        device_id: extendedTelemetry.device_id ?? null,
+        voltage_v: extendedTelemetry.voltage_v ?? null,
+        current_a: extendedTelemetry.current_a ?? null,
+        power_w: extendedTelemetry.power_w ?? null,
+        energy_wh: extendedTelemetry.energy_wh ?? null,
+        created_at: extendedTelemetry.created_at,
       }
+    : null;
 
-      setData(result);
-      setLastChecked(new Date().toLocaleTimeString());
-      setError("");
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : "Energy monitoring is unavailable."
-      );
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
+  const reading = simulationMode
+    ? simulatedReading
+    : realReading;
+
+  const history: EnergyReading[] = (recentTelemetry ?? []).map((item) => {
+    const extended = item as typeof item & ExtendedTelemetry;
+
+    if (simulationMode) {
+      return getSimulatedEnergy(extended);
     }
-  }, []);
 
-  useEffect(() => {
-    void loadEnergy();
+    return {
+      device_id: extended.device_id ?? null,
+      voltage_v: extended.voltage_v ?? null,
+      current_a: extended.current_a ?? null,
+      power_w: extended.power_w ?? null,
+      energy_wh: extended.energy_wh ?? null,
+      created_at: extended.created_at,
+    };
+  });
 
-    const interval = window.setInterval(() => {
-      void loadEnergy();
-    }, 15000);
-
-    return () => window.clearInterval(interval);
-  }, [loadEnergy]);
-
-  const reading = data?.telemetry ?? null;
-  const history = data?.history ?? [];
-
-  const status =
-    data?.mode === "live"
+  const status = simulationMode
+    ? "SIMULATION"
+    : deviceOnline
       ? "LIVE"
-      : data?.mode === "stale"
+      : telemetry
         ? "STALE"
         : "WAITING";
+
+  const handleRefresh = async () => {
+    await refreshTelemetry();
+  };
 
   return (
     <main className="energy-page">
@@ -114,14 +148,14 @@ export default function EnergyPage() {
 
           <button
             className="energy-refresh"
-            onClick={() => void loadEnergy(true)}
-            disabled={refreshing}
+            onClick={handleRefresh}
+            disabled={loading || changing}
           >
-            {refreshing ? "Refreshing..." : "↻ Refresh Data"}
+            {loading ? "Loading..." : "↻ Refresh Data"}
           </button>
         </header>
 
-        {error && (
+        {error && !simulationMode && (
           <div className="energy-error" role="alert">
             {error}
           </div>
@@ -130,24 +164,44 @@ export default function EnergyPage() {
         <section className="energy-connection">
           <div className="energy-connection-heading">
             <h2>ESP32 Energy Sensor Connection</h2>
-            <span className={`energy-status energy-${status.toLowerCase()}`}>
+
+            <span
+              className={`energy-status energy-${status.toLowerCase()}`}
+            >
               {status}
             </span>
           </div>
 
           <p>
             {loading
-              ? "Connecting to energy telemetry..."
-              : data?.message ?? "Waiting for energy readings."}
+              ? "Loading energy information..."
+              : simulationMode
+                ? "Simulation Mode is active. Demonstration energy readings are generated locally."
+                : deviceOnline
+                  ? "ESP32 telemetry is connected. Energy values appear when the corresponding fields are available."
+                  : "Waiting for current ESP32 telemetry. Check the device connection."}
           </p>
 
-          <small>Last checked: {lastChecked || "--"}</small>
-          <small>Data source: Energy telemetry database</small>
+          <small>
+            Last checked: {new Date().toLocaleTimeString()}
+          </small>
+
+          <small>
+            Data source:{" "}
+            {simulationMode
+              ? "Simulated greenhouse telemetry"
+              : "Real ESP32 telemetry"}
+          </small>
         </section>
 
         <section className="energy-section">
           <h2>Energy Overview</h2>
-          <p>Latest available energy sensor readings</p>
+
+          <p>
+            {simulationMode
+              ? "Illustrative energy readings for demonstration"
+              : "Latest available ESP32 energy sensor readings"}
+          </p>
 
           <div className="energy-grid">
             <article className="energy-card">
@@ -175,7 +229,11 @@ export default function EnergyPage() {
               <span>📊</span>
               <p>Energy Consumption</p>
               <h3>{formatNumber(reading?.energy_wh, "Wh")}</h3>
-              <small>Recorded energy usage</small>
+              <small>
+                {simulationMode
+                  ? "Illustrative demo value"
+                  : "Recorded energy usage"}
+              </small>
             </article>
           </div>
         </section>
@@ -191,8 +249,9 @@ export default function EnergyPage() {
             </strong>
 
             <p>
-              This value represents the latest power reading stored in
-              the energy telemetry database.
+              {simulationMode
+                ? "This is an illustrative power value generated from the simulated greenhouse equipment states."
+                : "This value represents the latest power reading received from the energy telemetry database."}
             </p>
 
             <h3>Total Recorded Energy</h3>
@@ -202,8 +261,9 @@ export default function EnergyPage() {
             </strong>
 
             <p>
-              This is the cumulative energy value reported by the sensor.
-              It is not calculated from missing readings.
+              {simulationMode
+                ? "This is a demonstration value, not actual accumulated electricity consumption."
+                : "This is the cumulative energy value reported by the sensor. It is not calculated from missing readings."}
             </p>
           </div>
         </section>
@@ -216,11 +276,13 @@ export default function EnergyPage() {
               <span>📡</span>
               <p>ESP32 Controller</p>
               <strong>
-                {data?.mode === "live"
-                  ? "Connected"
-                  : data?.mode === "stale"
-                    ? "Not confirmed"
-                    : "Waiting"}
+                {simulationMode
+                  ? "Demo Mode"
+                  : deviceOnline
+                    ? "Connected"
+                    : telemetry
+                      ? "Not confirmed"
+                      : "Waiting"}
               </strong>
             </div>
 
@@ -235,14 +297,17 @@ export default function EnergyPage() {
             <div>
               <span>🔋</span>
               <p>Device ID</p>
-              <strong>{reading?.device_id || "Not available"}</strong>
+              <strong>
+                {reading?.device_id || "Not available"}
+              </strong>
             </div>
           </div>
         </section>
 
         <section className="energy-section">
           <h2>Recent Energy History</h2>
-          <p>Latest {history.length} readings received</p>
+
+          <p>Latest {history.length} telemetry readings</p>
 
           <div className="energy-table-wrapper">
             <table className="energy-table">
@@ -270,8 +335,9 @@ export default function EnergyPage() {
                 ) : (
                   <tr>
                     <td colSpan={5} className="energy-empty">
-                      No energy history is available yet. Connect the
-                      ESP32 energy sensor and send real readings.
+                      {simulationMode
+                        ? "Waiting for simulated telemetry history."
+                        : "No energy history is available yet. Connect the ESP32 energy sensor and send real readings."}
                     </td>
                   </tr>
                 )}
@@ -282,9 +348,11 @@ export default function EnergyPage() {
 
         <footer className="energy-footer">
           GREENMIND SMART AGRICULTURE · ENERGY MANAGEMENT
+
           <p>
-            Energy information is read from the greenhouse telemetry
-            database. No simulated energy readings are displayed.
+            {simulationMode
+              ? "Simulation Mode: illustrative demonstration energy values are displayed."
+              : "Real Mode: energy values depend on the fields received from the ESP32 telemetry database."}
           </p>
         </footer>
       </div>

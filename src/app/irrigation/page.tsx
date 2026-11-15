@@ -1,6 +1,7 @@
+
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useGreenhouseMode } from "../components/GreenhouseModeProvider";
 import "./irrigation.css";
 
 type Telemetry = {
@@ -9,19 +10,8 @@ type Telemetry = {
   soil_moisture_percent: number | null;
   light_percent: number | null;
   battery_voltage: number | null;
+  pump_on?: boolean;
   created_at: string | null;
-};
-
-type IrrigationResponse = {
-  success: boolean;
-  mode?: "waiting" | "stale" | "live";
-  isSimulated?: boolean;
-  isStale?: boolean;
-  message?: string;
-  ageSeconds?: number | null;
-  telemetry?: Telemetry | null;
-  history?: Telemetry[];
-  error?: string;
 };
 
 function formatValue(
@@ -29,7 +19,11 @@ function formatValue(
   suffix = "",
   decimals = 1
 ) {
-  if (value === null || value === undefined || !Number.isFinite(value)) {
+  if (
+    value === null ||
+    value === undefined ||
+    !Number.isFinite(value)
+  ) {
     return "--";
   }
 
@@ -46,11 +40,14 @@ function formatTime(value: string | null | undefined) {
   return date.toLocaleString();
 }
 
-function getMoistureAdvice(value: number | null | undefined) {
+function getMoistureAdvice(
+  value: number | null | undefined,
+  simulationMode: boolean
+) {
   if (value === null || value === undefined) {
     return {
       title: "Waiting for soil moisture data",
-      message: "Connect the ESP32 soil moisture sensor to receive watering advice.",
+      message: "No soil moisture reading is currently available.",
       type: "neutral",
     };
   }
@@ -59,7 +56,7 @@ function getMoistureAdvice(value: number | null | undefined) {
     return {
       title: "Soil moisture is low",
       message:
-        "The soil may need watering. Check the plant and confirm the sensor reading before watering.",
+        "The soil may need watering. Check the plant and confirm the reading before watering.",
       type: "warning",
     };
   }
@@ -90,75 +87,43 @@ function getMoistureAdvice(value: number | null | undefined) {
 }
 
 export default function IrrigationPage() {
-  const [data, setData] = useState<IrrigationResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [lastChecked, setLastChecked] = useState<Date | null>(null);
-  const [error, setError] = useState("");
+  const {
+    simulationMode,
+    loading,
+    error,
+    telemetry,
+    recentTelemetry,
+    deviceOnline,
+    refreshTelemetry,
+  } = useGreenhouseMode();
 
-  const fetchIrrigationData = useCallback(async (manual = false) => {
-    if (manual) {
-      setRefreshing(true);
-    }
+  const data = telemetry as Telemetry | null;
+  const history = recentTelemetry as Telemetry[];
 
-    try {
-      const response = await fetch("/api/irrigation", {
-        method: "GET",
-        cache: "no-store",
-      });
+  const moisture = data?.soil_moisture_percent ?? null;
 
-      const result: IrrigationResponse = await response.json();
-
-      if (!response.ok || !result.success) {
-        throw new Error(
-          result.error || "Unable to load irrigation information."
-        );
-      }
-
-      setData(result);
-      setError("");
-      setLastChecked(new Date());
-    } catch (err) {
-      const message =
-        err instanceof Error
-          ? err.message
-          : "Unable to connect to the irrigation API.";
-
-      setError(message);
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchIrrigationData();
-
-    const interval = window.setInterval(() => {
-      fetchIrrigationData();
-    }, 15000);
-
-    return () => window.clearInterval(interval);
-  }, [fetchIrrigationData]);
-
-  const telemetry = data?.telemetry ?? null;
-  const history = data?.history ?? [];
-  const isLive = data?.mode === "live" && !data?.isStale;
-  const isWaiting = data?.mode === "waiting";
-  const isStale = data?.mode === "stale" || data?.isStale === true;
-  const advice = getMoistureAdvice(
-    telemetry?.soil_moisture_percent
-  );
-
-  const moisture = telemetry?.soil_moisture_percent;
   const moistureWidth =
-    moisture !== null && moisture !== undefined
+    moisture !== null
       ? Math.max(0, Math.min(100, moisture))
       : 0;
+
+  const advice = getMoistureAdvice(
+    moisture,
+    simulationMode
+  );
+
+  const refreshData = async () => {
+    await refreshTelemetry();
+  };
+
+  const isLive = !simulationMode && deviceOnline;
+  const isSimulated = simulationMode;
 
   return (
     <main className="irrigation-page">
       <div className="irrigation-container">
+
+        {/* HEADER */}
         <header className="irrigation-header">
           <div>
             <p className="irrigation-eyebrow">
@@ -168,89 +133,99 @@ export default function IrrigationPage() {
             <h1>Smart Irrigation Management</h1>
 
             <p className="irrigation-subtitle">
-              Monitor greenhouse soil moisture and receive irrigation
-              guidance from real sensor readings.
+              Monitor greenhouse soil moisture and receive
+              intelligent irrigation guidance.
             </p>
           </div>
 
           <button
             className="irrigation-refresh"
-            onClick={() => fetchIrrigationData(true)}
-            disabled={loading || refreshing}
+            onClick={refreshData}
+            disabled={loading}
           >
-            <span>{refreshing ? "↻" : "⟳"}</span>
-            {refreshing ? "Refreshing..." : "Refresh Data"}
+            <span>⟳</span>
+            {loading ? "Loading..." : "Refresh Data"}
           </button>
         </header>
 
+        {/* MODE STATUS */}
         <section className="irrigation-connection">
           <div className="connection-heading">
             <div className="connection-title">
               <span
                 className={`connection-dot ${
-                  isLive ? "dot-live" : "dot-offline"
+                  isSimulated || isLive
+                    ? "dot-live"
+                    : "dot-offline"
                 }`}
               />
 
               <div>
-                <h2>ESP32 Sensor Connection</h2>
+                <h2>
+                  {simulationMode
+                    ? "Simulation Sensor Connection"
+                    : "ESP32 Sensor Connection"}
+                </h2>
+
                 <p>
-                  {isLive
+                  {simulationMode
+                    ? "Generated greenhouse readings are active"
+                    : isLive
                     ? "Live sensor readings received"
-                    : isStale
-                      ? "Sensor readings are outdated"
-                      : "Waiting for ESP32 connection"}
+                    : "Waiting for ESP32 connection"}
                 </p>
               </div>
             </div>
 
             <span
               className={`connection-badge ${
-                isLive
+                isSimulated || isLive
                   ? "badge-live"
-                  : isStale
-                    ? "badge-stale"
-                    : "badge-offline"
+                  : "badge-offline"
               }`}
             >
               {loading
-                ? "CHECKING"
+                ? "LOADING"
+                : simulationMode
+                ? "SIMULATION"
                 : isLive
-                  ? "LIVE"
-                  : isStale
-                    ? "STALE"
-                    : "WAITING"}
+                ? "LIVE"
+                : "OFFLINE"}
             </span>
           </div>
 
           <p className="connection-message">
             {error ||
-              data?.message ||
-              (loading
-                ? "Checking for greenhouse sensor readings..."
-                : "No sensor information is currently available.")}
+              (simulationMode
+                ? "This page is using simulated greenhouse sensor readings."
+                : isLive
+                ? "ESP32 telemetry is being received from Supabase."
+                : "No recent ESP32 sensor readings are available.")}
           </p>
 
           <div className="connection-footer">
             <span>
-              Last checked:{" "}
-              {lastChecked
-                ? lastChecked.toLocaleTimeString()
-                : "Not checked"}
+              Operating mode:{" "}
+              {simulationMode
+                ? "Simulation"
+                : "Real ESP32"}
             </span>
 
             <span>
               Data source:{" "}
-              {data?.isSimulated ? "Simulated" : "Greenhouse telemetry"}
+              {simulationMode
+                ? "Local simulator"
+                : "Greenhouse telemetry"}
             </span>
           </div>
         </section>
 
+        {/* SENSOR MONITORING */}
         <section className="irrigation-section">
           <div className="section-heading">
             <div>
               <h2>Sensor Monitoring</h2>
-              <p>Latest available greenhouse readings</p>
+              <p>Latest greenhouse readings</p>
             </div>
           </div>
 
@@ -260,7 +235,7 @@ export default function IrrigationPage() {
               <p className="metric-label">Soil Moisture</p>
               <h3>
                 {formatValue(
-                  telemetry?.soil_moisture_percent,
+                  data?.soil_moisture_percent,
                   "%",
                   1
                 )}
@@ -274,7 +249,7 @@ export default function IrrigationPage() {
               <div className="metric-icon temperature-icon">🌡️</div>
               <p className="metric-label">Temperature</p>
               <h3>
-                {formatValue(telemetry?.temperature_c, "°C", 1)}
+                {formatValue(data?.temperature_c, "°C")}
               </h3>
               <p className="metric-description">
                 Greenhouse temperature
@@ -286,9 +261,8 @@ export default function IrrigationPage() {
               <p className="metric-label">Air Humidity</p>
               <h3>
                 {formatValue(
-                  telemetry?.humidity_percent,
-                  "%",
-                  1
+                  data?.humidity_percent,
+                  "%"
                 )}
               </h3>
               <p className="metric-description">
@@ -300,7 +274,7 @@ export default function IrrigationPage() {
               <div className="metric-icon light-icon">☀️</div>
               <p className="metric-label">Light Intensity</p>
               <h3>
-                {formatValue(telemetry?.light_percent, "%", 1)}
+                {formatValue(data?.light_percent, "%")}
               </h3>
               <p className="metric-description">
                 Recorded light level
@@ -309,18 +283,21 @@ export default function IrrigationPage() {
           </div>
         </section>
 
+        {/* SOIL MOISTURE ANALYSIS */}
         <section className="irrigation-section">
           <div className="section-heading">
             <div>
               <h2>Soil Moisture Analysis</h2>
-              <p>Latest recorded soil moisture percentage</p>
+              <p>Current soil moisture percentage</p>
             </div>
           </div>
 
           <article className="moisture-panel">
             <div className="moisture-panel-top">
               <div>
-                <p className="metric-label">Current Soil Moisture</p>
+                <p className="metric-label">
+                  Current Soil Moisture
+                </p>
                 <h3>
                   {formatValue(moisture, "%", 1)}
                 </h3>
@@ -335,11 +312,7 @@ export default function IrrigationPage() {
               aria-label="Soil moisture"
               aria-valuemin={0}
               aria-valuemax={100}
-              aria-valuenow={
-                moisture !== null && moisture !== undefined
-                  ? moisture
-                  : 0
-              }
+              aria-valuenow={moisture ?? 0}
             >
               <div
                 className="moisture-progress-fill"
@@ -353,29 +326,35 @@ export default function IrrigationPage() {
             </div>
 
             <p className="moisture-note">
-              This percentage is displayed directly from the latest
-              stored sensor reading. It is not a simulated value.
+              {simulationMode
+                ? "Demonstration value generated by the GreenMind simulator."
+                : "Value received from the latest ESP32 sensor reading."}
             </p>
           </article>
         </section>
 
+        {/* IRRIGATION ADVISORY */}
         <section className="irrigation-section">
           <div className="section-heading">
             <div>
               <h2>Smart Irrigation Advisory</h2>
-              <p>Guidance based on the latest soil moisture reading</p>
+              <p>
+                Guidance based on current soil moisture
+              </p>
             </div>
           </div>
 
-          <article className={`advisory-card advisory-${advice.type}`}>
+          <article
+            className={`advisory-card advisory-${advice.type}`}
+          >
             <div className="advisory-icon">
               {advice.type === "warning"
                 ? "⚠️"
                 : advice.type === "good"
-                  ? "✓"
-                  : advice.type === "caution"
-                    ? "!"
-                    : "💧"}
+                ? "✓"
+                : advice.type === "caution"
+                ? "!"
+                : "💧"}
             </div>
 
             <div>
@@ -384,15 +363,21 @@ export default function IrrigationPage() {
             </div>
           </article>
 
-          {!isLive && (
+          {!simulationMode && !isLive && (
             <p className="advisory-warning">
-              Advisory information may be unavailable or based on an
-              outdated reading. Check the ESP32 connection before
-              making irrigation decisions.
+              ESP32 readings are unavailable or outdated.
+              Check the device before making irrigation decisions.
+            </p>
+          )}
+
+          {simulationMode && (
+            <p className="advisory-warning">
+              Simulation advisory only. No real water pump is activated.
             </p>
           )}
         </section>
 
+        {/* SYSTEM STATUS */}
         <section className="irrigation-section">
           <div className="section-heading">
             <div>
@@ -405,8 +390,18 @@ export default function IrrigationPage() {
             <article className="system-status-card">
               <span className="status-card-icon">📡</span>
               <div>
-                <p>ESP32 Controller</p>
-                <strong>{isLive ? "Connected" : "Not confirmed"}</strong>
+                <p>
+                  {simulationMode
+                    ? "Simulator"
+                    : "ESP32 Controller"}
+                </p>
+                <strong>
+                  {simulationMode
+                    ? "Running"
+                    : isLive
+                    ? "Connected"
+                    : "Not connected"}
+                </strong>
               </div>
             </article>
 
@@ -414,7 +409,13 @@ export default function IrrigationPage() {
               <span className="status-card-icon">🚿</span>
               <div>
                 <p>Water Pump</p>
-                <strong>Control not configured</strong>
+                <strong>
+                  {simulationMode
+                    ? data?.pump_on
+                      ? "Simulated ON"
+                      : "Simulated OFF"
+                    : "Control not configured"}
+                </strong>
               </div>
             </article>
 
@@ -423,7 +424,11 @@ export default function IrrigationPage() {
               <div>
                 <p>Battery Voltage</p>
                 <strong>
-                  {formatValue(telemetry?.battery_voltage, " V", 2)}
+                  {formatValue(
+                    data?.battery_voltage,
+                    " V",
+                    2
+                  )}
                 </strong>
               </div>
             </article>
@@ -433,20 +438,23 @@ export default function IrrigationPage() {
               <div>
                 <p>Last Sensor Reading</p>
                 <strong className="reading-time">
-                  {formatTime(telemetry?.created_at)}
+                  {formatTime(data?.created_at)}
                 </strong>
               </div>
             </article>
           </div>
         </section>
 
+        {/* HISTORY */}
         <section className="irrigation-section">
           <div className="section-heading">
             <div>
               <h2>Recent Sensor History</h2>
               <p>
-                Latest {history.length} readings received from the
-                greenhouse database
+                Latest {history.length}{" "}
+                {simulationMode
+                  ? "simulated readings"
+                  : "ESP32 readings"}
               </p>
             </div>
           </div>
@@ -495,7 +503,7 @@ export default function IrrigationPage() {
                     <td colSpan={5} className="history-empty">
                       {loading
                         ? "Loading sensor history..."
-                        : "No sensor history is available yet. Connect the ESP32 and send readings to the database."}
+                        : "No sensor history is available yet."}
                     </td>
                   </tr>
                 )}
@@ -509,7 +517,9 @@ export default function IrrigationPage() {
             GREENMIND SMART AGRICULTURE · SMART IRRIGATION
           </p>
           <p>
-            Sensor data is read from the greenhouse telemetry database.
+            {simulationMode
+              ? "Simulation data · Demonstration mode"
+              : "Real ESP32 sensor telemetry"}
           </p>
         </footer>
       </div>

@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useGreenhouseMode } from "../components/GreenhouseModeProvider";
 import "./water-management.css";
 
 type WaterReading = {
@@ -11,14 +11,11 @@ type WaterReading = {
   created_at: string;
 };
 
-type WaterResponse = {
-  success: boolean;
-  mode?: "live" | "stale" | "waiting";
-  isStale?: boolean;
-  message?: string;
-  ageSeconds?: number | null;
-  telemetry?: WaterReading | null;
-  history?: WaterReading[];
+type ExtendedTelemetry = {
+  device_id?: string | null;
+  tank_level_percent?: number | null;
+  water_volume_liters?: number | null;
+  created_at?: string;
 };
 
 function formatDate(value?: string | null) {
@@ -31,59 +28,54 @@ function formatDate(value?: string | null) {
   return date.toLocaleString();
 }
 
-function formatAge(seconds?: number | null) {
-  if (seconds === null || seconds === undefined) return "Not available";
+function formatAge(value?: string | null) {
+  if (!value) return "Not available";
+
+  const seconds = Math.max(
+    0,
+    Math.floor((Date.now() - new Date(value).getTime()) / 1000)
+  );
+
+  if (!Number.isFinite(seconds)) return "Not available";
   if (seconds < 60) return `${seconds} seconds ago`;
 
   return `${Math.floor(seconds / 60)} minutes ago`;
 }
 
 export default function WaterManagementPage() {
-  const [data, setData] = useState<WaterResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState("");
+  const {
+    simulationMode,
+    loading,
+    changing,
+    error,
+    telemetry,
+    recentTelemetry,
+    deviceOnline,
+    refreshTelemetry,
+  } = useGreenhouseMode();
 
-  const loadData = useCallback(async (manual = false) => {
-    if (manual) setRefreshing(true);
+  const extendedTelemetry = telemetry as
+    | (typeof telemetry & ExtendedTelemetry)
+    | null;
 
-    try {
-      const response = await fetch("/api/water-management", {
-        cache: "no-store",
-      });
+  // Demo tank level is illustrative, not a physical sensor measurement.
+  const simulatedLevel = Math.min(
+    95,
+    Math.max(
+      25,
+      Math.round(55 + (telemetry?.soil_moisture_percent ?? 50) * 0.3)
+    )
+  );
 
-      const result: WaterResponse = await response.json();
+  const realLevel = extendedTelemetry?.tank_level_percent;
+  const realVolume = extendedTelemetry?.water_volume_liters;
 
-      if (!response.ok || !result.success) {
-        throw new Error("Unable to load water tank data.");
-      }
+  const level = simulationMode ? simulatedLevel : realLevel ?? null;
 
-      setData(result);
-      setError("");
-    } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Something went wrong."
-      );
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    loadData();
-
-    const interval = setInterval(() => {
-      loadData();
-    }, 15000);
-
-    return () => clearInterval(interval);
-  }, [loadData]);
-
-  const reading = data?.telemetry ?? null;
-
-  const level = reading?.tank_level_percent;
-  const volume = reading?.water_volume_liters;
+  // Demo volume assumes a 100-litre tank. This is only an illustrative value.
+  const volume = simulationMode
+    ? Math.round(simulatedLevel)
+    : realVolume ?? null;
 
   const validLevel =
     typeof level === "number" &&
@@ -96,20 +88,55 @@ export default function WaterManagementPage() {
     Number.isFinite(volume) &&
     volume >= 0;
 
-  let waterStatus = "Waiting for data";
+  const history: WaterReading[] = simulationMode
+    ? (recentTelemetry ?? []).map((item) => {
+        const itemLevel = Math.min(
+          95,
+          Math.max(
+            25,
+            Math.round(55 + (item.soil_moisture_percent ?? 50) * 0.3)
+          )
+        );
 
-  if (validLevel) {
-    if (level <= 20) waterStatus = "Low water level";
-    else if (level <= 50) waterStatus = "Moderate water level";
-    else waterStatus = "Water level sufficient";
-  }
+        return {
+          device_id: item.device_id ?? "SIMULATOR",
+          tank_level_percent: itemLevel,
+          water_volume_liters: itemLevel,
+          created_at: item.created_at,
+        };
+      })
+    : (recentTelemetry ?? []).map((item) => {
+        const extended = item as typeof item & ExtendedTelemetry;
 
-  const connectionStatus =
-    data?.mode === "live"
+        return {
+          device_id: extended.device_id ?? null,
+          tank_level_percent: extended.tank_level_percent ?? null,
+          water_volume_liters: extended.water_volume_liters ?? null,
+          created_at: extended.created_at,
+        };
+      });
+
+  const waterStatus = !validLevel
+    ? "Waiting for water tank data"
+    : level <= 20
+      ? "Low water level"
+      : level <= 50
+        ? "Moderate water level"
+        : "Water level sufficient";
+
+  const connectionStatus = simulationMode
+    ? "SIMULATION"
+    : deviceOnline
       ? "LIVE"
-      : data?.mode === "stale"
+      : telemetry
         ? "STALE"
         : "WAITING";
+
+  const lastReading = telemetry?.created_at;
+
+  const handleRefresh = async () => {
+    await refreshTelemetry();
+  };
 
   return (
     <main className="water-page">
@@ -125,33 +152,33 @@ export default function WaterManagementPage() {
 
           <button
             className="water-refresh"
-            onClick={() => loadData(true)}
-            disabled={refreshing}
+            onClick={handleRefresh}
+            disabled={loading || changing}
           >
-            {refreshing ? "Refreshing..." : "↻ Refresh Data"}
+            {loading ? "Loading..." : "↻ Refresh Data"}
           </button>
         </header>
 
-        {error && (
-          <div className="water-error" role="alert">
-            {error}
-          </div>
-        )}
-
-        <section className="water-connection">
+        <div className="water-connection">
           <div className="water-section-heading">
             <div>
               <h2>Water Tank Sensor Connection</h2>
-              <p>ESP32 greenhouse telemetry status</p>
+              <p>
+                {simulationMode
+                  ? "Generated demonstration readings"
+                  : "ESP32 greenhouse telemetry status"}
+              </p>
             </div>
 
             <span
               className={`water-status ${
-                data?.mode === "live"
+                simulationMode
                   ? "status-live"
-                  : data?.mode === "stale"
-                    ? "status-stale"
-                    : "status-waiting"
+                  : deviceOnline
+                    ? "status-live"
+                    : telemetry
+                      ? "status-stale"
+                      : "status-waiting"
               }`}
             >
               {connectionStatus}
@@ -161,18 +188,36 @@ export default function WaterManagementPage() {
           <p className="water-message">
             {loading
               ? "Loading water tank information..."
-              : data?.message ?? "Waiting for ESP32 connection."}
+              : simulationMode
+                ? "Simulation Mode is active. Water tank values are illustrative demo readings."
+                : error
+                  ? error
+                  : deviceOnline
+                    ? "ESP32 telemetry is connected. Water tank values appear when the corresponding fields are available."
+                    : "Waiting for current ESP32 telemetry. Check the device connection."}
           </p>
 
           <small>
             Last checked: {new Date().toLocaleTimeString()}
           </small>
-          <small>Data source: Water tank telemetry</small>
-        </section>
+
+          <small>
+            Data source:{" "}
+            {simulationMode
+              ? "Simulated greenhouse telemetry"
+              : "Real ESP32 telemetry"}
+          </small>
+        </div>
+
+        {error && !simulationMode && (
+          <div className="water-error" role="alert">
+            {error}
+          </div>
+        )}
 
         <section className="water-section">
           <h2>Water Tank Overview</h2>
-          <p>Latest available sensor readings</p>
+          <p>Latest available water information</p>
 
           <div className="water-stats">
             <article className="water-card">
@@ -186,31 +231,41 @@ export default function WaterManagementPage() {
               <span>🚰</span>
               <p>Available Water</p>
               <h3>{validVolume ? `${volume} L` : "--"}</h3>
-              <small>Recorded water volume</small>
+              <small>
+                {simulationMode
+                  ? "Illustrative demo volume"
+                  : "Recorded water volume"}
+              </small>
             </article>
 
             <article className="water-card">
               <span>📡</span>
               <p>ESP32 Controller</p>
               <h3>
-                {data?.mode === "live"
-                  ? "Connected"
-                  : data?.mode === "stale"
-                    ? "Not confirmed"
-                    : "Waiting"}
+                {simulationMode
+                  ? "Demo Mode"
+                  : deviceOnline
+                    ? "Connected"
+                    : telemetry
+                      ? "Not confirmed"
+                      : "Waiting"}
               </h3>
-              <small>Based on telemetry freshness</small>
+              <small>
+                {simulationMode
+                  ? "No physical sensor required"
+                  : "Based on telemetry freshness"}
+              </small>
             </article>
 
             <article className="water-card">
               <span>🕒</span>
               <p>Last Sensor Reading</p>
               <h3 className="water-date">
-                {reading ? formatDate(reading.created_at) : "--"}
+                {lastReading ? formatDate(lastReading) : "--"}
               </h3>
               <small>
-                {reading
-                  ? formatAge(data?.ageSeconds)
+                {lastReading
+                  ? formatAge(lastReading)
                   : "No reading received"}
               </small>
             </article>
@@ -219,7 +274,11 @@ export default function WaterManagementPage() {
 
         <section className="water-section">
           <h2>Tank Level Analysis</h2>
-          <p>Water level from the latest stored sensor reading</p>
+          <p>
+            {simulationMode
+              ? "Illustrative water level for demonstration"
+              : "Water level from the latest available ESP32 reading"}
+          </p>
 
           <div className="water-analysis">
             <div className="water-analysis-heading">
@@ -251,13 +310,13 @@ export default function WaterManagementPage() {
             <div className="water-advisory">
               <strong>{waterStatus}</strong>
               <p>
-                {validLevel
-                  ? level <= 20
+                {!validLevel
+                  ? "No valid water tank level is available. Add a tank-level sensor and send its readings to the telemetry database."
+                  : level <= 20
                     ? "The recorded tank level is low. Check the water supply before irrigation."
                     : level <= 50
                       ? "The recorded tank level is moderate. Monitor water availability."
-                      : "The recorded tank level is sufficient."
-                  : "Waiting for a valid water tank sensor reading. Connect the ESP32 to receive water-level guidance."}
+                      : "The displayed water level is sufficient based on the available reading."}
               </p>
             </div>
           </div>
@@ -269,29 +328,26 @@ export default function WaterManagementPage() {
           <div className="water-advisory">
             <h3>💧 Water Availability Guidance</h3>
             <p>
-              {data?.mode !== "live"
-                ? "Water availability advice is unavailable because no current sensor reading has been confirmed."
-                : !validLevel
-                  ? "The latest reading does not contain a valid tank level."
-                  : level <= 20
-                    ? "Water is running low. Inspect the tank and refill it before the next irrigation cycle."
-                    : level <= 50
-                      ? "Water is available at a moderate level. Continue monitoring the tank."
-                      : "Water availability is currently sufficient based on the latest sensor reading."}
+              {!validLevel
+                ? "Water availability advice is unavailable because a valid tank-level reading has not been received."
+                : level <= 20
+                  ? "Water is running low. Inspect the tank and refill it before the next irrigation cycle."
+                  : level <= 50
+                    ? "Water is available at a moderate level. Continue monitoring the tank."
+                    : "Water availability is currently sufficient based on the displayed reading."}
             </p>
           </div>
 
           <p className="water-disclaimer">
-            Recommendations are based on stored sensor readings. They do
-            not operate pumps or control water equipment.
+            {simulationMode
+              ? "Simulation readings are for demonstration only. They do not represent actual tank measurements."
+              : "Recommendations are based on available telemetry. They do not operate pumps or control water equipment."}
           </p>
         </section>
 
         <section className="water-section">
           <h2>Recent Water Tank History</h2>
-          <p>
-            Latest {data?.history?.length ?? 0} readings received
-          </p>
+          <p>Latest {history.length} available telemetry readings</p>
 
           <div className="water-table-wrapper">
             <table className="water-table">
@@ -305,8 +361,8 @@ export default function WaterManagementPage() {
               </thead>
 
               <tbody>
-                {data?.history?.length ? (
-                  data.history.map((item, index) => (
+                {history.length ? (
+                  history.map((item, index) => (
                     <tr key={`${item.created_at}-${index}`}>
                       <td>{formatDate(item.created_at)}</td>
                       <td>
@@ -319,14 +375,17 @@ export default function WaterManagementPage() {
                           ? `${item.water_volume_liters} L`
                           : "--"}
                       </td>
-                      <td>{item.device_id || "Not provided"}</td>
+                      <td>
+                        {item.device_id || "Not provided"}
+                      </td>
                     </tr>
                   ))
                 ) : (
                   <tr>
                     <td colSpan={4} className="water-empty">
-                      No water tank history is available yet. Connect the
-                      ESP32 and send real readings to the database.
+                      {simulationMode
+                        ? "Waiting for simulated telemetry history."
+                        : "No water tank history is available yet. Connect the ESP32 and send readings to the database."}
                     </td>
                   </tr>
                 )}
@@ -338,8 +397,9 @@ export default function WaterManagementPage() {
         <footer className="water-footer">
           GREENMIND SMART AGRICULTURE · SMART WATER MANAGEMENT
           <p>
-            Water information is read from the greenhouse telemetry
-            database. No simulated sensor readings are displayed.
+            {simulationMode
+              ? "Simulation Mode: illustrative demo values are displayed."
+              : "Real Mode: values depend on the fields received from the ESP32 telemetry database."}
           </p>
         </footer>
       </div>

@@ -1,3 +1,4 @@
+
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -234,6 +235,7 @@ export default function DiseaseDetectionPage() {
 
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyClearing, setHistoryClearing] = useState(false);
   const [historyError, setHistoryError] = useState("");
   const [saveMessage, setSaveMessage] = useState("");
   const [historyMessage, setHistoryMessage] = useState("");
@@ -260,7 +262,7 @@ export default function DiseaseDetectionPage() {
     setPreview(url);
   }
 
-  // LOAD LATEST 10 DIAGNOSIS RECORDS
+  // LOAD LATEST 3 DIAGNOSIS RECORDS
   const loadDiagnosisHistory = useCallback(async () => {
     setHistoryLoading(true);
     setHistoryError("");
@@ -273,7 +275,7 @@ export default function DiseaseDetectionPage() {
         )
         .order("created_at", { ascending: false })
         .order("id", { ascending: false })
-        .range(0, 9);
+        .range(0, 2);
 
       if (error) throw error;
 
@@ -316,14 +318,53 @@ export default function DiseaseDetectionPage() {
     }
   }, []);
 
-  // Diagnosis history is shared on this public dashboard.
-  // Global deletion is intentionally disabled until an authenticated
-  // administrator-only server action and appropriate database policies exist.
+  // CLEAR SHARED DIAGNOSIS HISTORY.
+  // Protect this operation with admin authorization before public deployment.
+  async function clearDiagnosisHistory() {
+    const confirmed = window.confirm(
+      "Permanently delete ALL diagnosis history and saved leaf images? This action cannot be undone."
+    );
+
+    if (!confirmed) return;
+
+    try {
+      setHistoryClearing(true);
+      setHistoryError("");
+      setHistoryMessage("");
+
+      const response = await fetch("/api/disease-history/clear", {
+        method: "DELETE",
+      });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(
+          result.error || "Unable to clear diagnosis history."
+        );
+      }
+
+      setHistory([]);
+
+      setHistoryMessage(
+        `Successfully cleared ${result.deletedRecords ?? 0} diagnosis record(s) and their saved images.`
+      );
+    } catch (error) {
+      setHistoryError(
+        error instanceof Error
+          ? error.message
+          : "Unable to clear diagnosis history."
+      );
+    } finally {
+      setHistoryClearing(false);
+    }
+  }
 
   useEffect(() => {
     loadDiagnosisHistory();
   }, [loadDiagnosisHistory]);
-    // START CAMERA
+
+  // START CAMERA
   async function startCamera() {
     try {
       setMessage("");
@@ -503,10 +544,11 @@ export default function DiseaseDetectionPage() {
     );
   }
 
-  // SAVE DIAGNOSIS TO SUPABASE
+  // SAVE DIAGNOSIS AND VISUAL HEALTH SCORE TO SUPABASE
   async function saveDiagnosisRecord(
     result: Diagnosis,
-    imageFile: File
+    imageFile: File,
+    visualResult: LeafVisualAnalysis | null
   ) {
     const care = getDiseaseCare(result.condition);
 
@@ -552,6 +594,16 @@ export default function DiseaseDetectionPage() {
         image_path: imagePath,
         original_filename: imageFile.name,
         model_name: "PlantVillage MobileNetV2",
+
+        // Experimental visual leaf health analysis
+        health_score: visualResult?.healthScore ?? null,
+        health_label: visualResult?.healthLabel ?? null,
+        green_percent: visualResult?.greenPercent ?? null,
+        yellow_percent: visualResult?.yellowPercent ?? null,
+        brown_percent: visualResult?.brownPercent ?? null,
+        visible_damage_percent:
+          visualResult?.visibleDamagePercent ?? null,
+        sampled_pixels: visualResult?.sampledPixels ?? null,
       });
 
     if (insertError) {
@@ -609,10 +661,10 @@ export default function DiseaseDetectionPage() {
       setDiagnosis(result);
 
       // RUN EXPERIMENTAL COLOUR ANALYSIS
-      try {
-        const visualResult =
-          await analyseLeafColours(file);
+      let visualResult: LeafVisualAnalysis | null = null;
 
+      try {
+        visualResult = await analyseLeafColours(file);
         setVisualAnalysis(visualResult);
       } catch (visualError) {
         console.warn(
@@ -628,10 +680,10 @@ export default function DiseaseDetectionPage() {
       );
 
       try {
-        await saveDiagnosisRecord(result, file);
+        await saveDiagnosisRecord(result, file, visualResult);
 
         setSaveMessage(
-          "✓ Diagnosis and leaf image saved successfully."
+          "✓ Diagnosis, image and visual health score saved successfully."
         );
       } catch (saveError) {
         console.error(
@@ -897,7 +949,9 @@ export default function DiseaseDetectionPage() {
               Use a clear, well-lit image of the affected leaf.
             </p>
           </section>
-        </div>        {/* STATUS MESSAGE */}
+        </div>
+
+        {/* STATUS MESSAGE */}
         {message && (
           <div className="gm-message" role="status">
             {message}
@@ -1085,9 +1139,8 @@ export default function DiseaseDetectionPage() {
 
               <p className="gm-small">
                 This is an experimental visual indicator,
-                not a medically or agronomically validated
-                plant-health score. It is separate from AI
-                disease confidence.
+                not an agronomically validated plant-health
+                score. It is separate from AI disease confidence.
               </p>
             </div>
 
@@ -1203,7 +1256,7 @@ export default function DiseaseDetectionPage() {
 
               <p>
                 Showing {history.length} of the latest
-                10 diagnosis records.
+                3 diagnosis records.
               </p>
             </div>
 
@@ -1211,16 +1264,18 @@ export default function DiseaseDetectionPage() {
               <button
                 className="gm-outline"
                 onClick={loadDiagnosisHistory}
-                disabled={
-                  historyLoading
-                }
+                disabled={historyLoading}
               >
                 ↻ Refresh
               </button>
 
-              <span className="gm-small" title="History deletion is disabled on the public dashboard.">
-                History deletion is disabled for public safety.
-              </span>
+              <button
+                className="gm-danger"
+                onClick={clearDiagnosisHistory}
+                disabled={historyClearing || historyLoading}
+              >
+                {historyClearing ? "Clearing..." : "Clear History"}
+              </button>
             </div>
           </div>
 

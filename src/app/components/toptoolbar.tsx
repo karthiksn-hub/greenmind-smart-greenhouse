@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { GreenhouseModeControl } from "./GreenhouseModeProvider";
 
 declare global {
   interface Window {
@@ -36,16 +37,39 @@ export default function TopToolbar() {
   const [translatorReady, setTranslatorReady] = useState(false);
 
   useEffect(() => {
-    const savedTheme = localStorage.getItem("gm-theme");
+    const savedTheme = localStorage.getItem("greenmind-theme");
     const savedLanguage = localStorage.getItem("gm-language");
 
     const isDark = savedTheme !== "light";
-    setDarkMode(isDark);
-    document.documentElement.dataset.theme = isDark ? "dark" : "light";
 
-    if (savedLanguage && languages.some((item) => item.code === savedLanguage)) {
+    setDarkMode(isDark);
+
+    document.documentElement.dataset.theme = isDark
+      ? "dark"
+      : "light";
+
+    if (
+      savedLanguage &&
+      languages.some((item) => item.code === savedLanguage)
+    ) {
       setLanguage(savedLanguage);
     }
+
+    const handleThemeChange = (event: Event) => {
+      const customEvent = event as CustomEvent<string>;
+      const nextTheme = customEvent.detail;
+
+      if (nextTheme !== "dark" && nextTheme !== "light") return;
+
+      setDarkMode(nextTheme === "dark");
+      document.documentElement.dataset.theme = nextTheme;
+      localStorage.setItem("greenmind-theme", nextTheme);
+    };
+
+    window.addEventListener(
+      "greenmind-theme-change",
+      handleThemeChange
+    );
 
     window.googleTranslateElementInit = () => {
       if (!window.google?.translate?.TranslateElement) return;
@@ -63,56 +87,89 @@ export default function TopToolbar() {
     };
 
     const scriptId = "google-translate-script";
-    let script = document.getElementById(scriptId) as HTMLScriptElement | null;
+
+    let script = document.getElementById(
+      scriptId
+    ) as HTMLScriptElement | null;
 
     if (!script) {
       script = document.createElement("script");
+
       script.id = scriptId;
+
       script.src =
         "https://translate.google.com/translate_a/element.js?cb=googleTranslateElementInit";
+
       script.async = true;
+
       document.body.appendChild(script);
     } else if (document.querySelector(".goog-te-combo")) {
       setTranslatorReady(true);
     }
 
     return () => {
+      window.removeEventListener(
+        "greenmind-theme-change",
+        handleThemeChange
+      );
+
       window.speechSynthesis?.cancel();
     };
   }, []);
 
   function toggleTheme() {
     const next = !darkMode;
+    const nextTheme = next ? "dark" : "light";
+
     setDarkMode(next);
-    document.documentElement.dataset.theme = next ? "dark" : "light";
-    localStorage.setItem("gm-theme", next ? "dark" : "light");
+
+    document.documentElement.dataset.theme = nextTheme;
+
+    localStorage.setItem("greenmind-theme", nextTheme);
+
+    window.dispatchEvent(
+      new CustomEvent("greenmind-theme-change", {
+        detail: nextTheme,
+      })
+    );
   }
 
   function translateWebsite() {
     if (!translatorReady) {
-      alert("Translator is loading. Please wait a few seconds and try again.");
+      alert(
+        "Translator is loading. Please wait a few seconds and try again."
+      );
       return;
     }
 
-    const combo = document.querySelector<HTMLSelectElement>(".goog-te-combo");
+    const combo =
+      document.querySelector<HTMLSelectElement>(".goog-te-combo");
 
     if (!combo) {
-      alert("Google Translate is unavailable. Check your internet connection.");
+      alert(
+        "Google Translate is unavailable. Check your internet connection."
+      );
       return;
     }
 
     combo.value = language;
-    combo.dispatchEvent(new Event("change", { bubbles: true }));
+
+    combo.dispatchEvent(
+      new Event("change", { bubbles: true })
+    );
   }
 
   function changeLanguage(value: string) {
     setLanguage(value);
+
     localStorage.setItem("gm-language", value);
   }
 
   function toggleVoice() {
     if (!("speechSynthesis" in window)) {
-      alert("Voice assistance is not supported in this browser.");
+      alert(
+        "Voice assistance is not supported in this browser."
+      );
       return;
     }
 
@@ -123,8 +180,10 @@ export default function TopToolbar() {
     }
 
     const selectedText = window.getSelection()?.toString().trim();
+
     const pageText =
-      document.querySelector("main")?.innerText || document.body.innerText;
+      document.querySelector("main")?.innerText ||
+      document.body.innerText;
 
     const textToRead = (selectedText || pageText)
       .replace(/\s+/g, " ")
@@ -141,6 +200,7 @@ export default function TopToolbar() {
     );
 
     const utterance = new SpeechSynthesisUtterance(textToRead);
+
     utterance.lang = selectedLanguage?.voice || "en-IN";
     utterance.rate = 0.9;
 
@@ -149,6 +209,7 @@ export default function TopToolbar() {
 
     window.speechSynthesis.cancel();
     window.speechSynthesis.speak(utterance);
+
     setVoiceOn(true);
   }
 
@@ -156,6 +217,11 @@ export default function TopToolbar() {
     <>
       <header className="gm-toolbar">
         <div className="gm-toolbar-inner">
+
+          {/* MASTER SIMULATION MODE */}
+          <GreenhouseModeControl />
+
+          {/* THEME SWITCH */}
           <button
             className="gm-toolbar-button"
             onClick={toggleTheme}
@@ -164,10 +230,13 @@ export default function TopToolbar() {
             {darkMode ? "☀️ Light Mode" : "🌙 Dark Mode"}
           </button>
 
+          {/* LANGUAGE SELECTOR */}
           <select
             className="gm-language-select"
             value={language}
-            onChange={(event) => changeLanguage(event.target.value)}
+            onChange={(event) =>
+              changeLanguage(event.target.value)
+            }
             aria-label="Select language"
           >
             {languages.map((item) => (
@@ -177,6 +246,7 @@ export default function TopToolbar() {
             ))}
           </select>
 
+          {/* TRANSLATE WEBSITE */}
           <button
             className="gm-translate-button"
             onClick={translateWebsite}
@@ -185,6 +255,7 @@ export default function TopToolbar() {
             🌐 Translate Website
           </button>
 
+          {/* VOICE CONTROL */}
           <button
             className="gm-toolbar-button"
             onClick={toggleVoice}
@@ -192,6 +263,7 @@ export default function TopToolbar() {
           >
             {voiceOn ? "🔊 Voice ON" : "🔇 Voice OFF"}
           </button>
+
         </div>
       </header>
 
