@@ -19,7 +19,7 @@ MODEL_NAME = os.getenv(
     "neghani/plantvillage-mobilenetv2"
 )
 
-MAX_IMAGE_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_IMAGE_SIZE = 10 * 1024 * 1024
 
 ALLOWED_CONTENT_TYPES = {
     "image/jpeg",
@@ -90,13 +90,24 @@ app = FastAPI(
 # CORS CONFIGURATION
 # --------------------------------------------------
 
+FRONTEND_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://greenmind-smart-greenhouse-xalv.vercel.app",
+]
+
+extra_origins = os.getenv("FRONTEND_ORIGINS", "")
+
+if extra_origins:
+    FRONTEND_ORIGINS.extend(
+        origin.strip()
+        for origin in extra_origins.split(",")
+        if origin.strip()
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        "https://greenmind-smart-greenhouse.vercel.app",
-    ],
+    allow_origins=FRONTEND_ORIGINS,
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
@@ -107,14 +118,6 @@ app.add_middleware(
 # --------------------------------------------------
 
 def format_prediction(label: str):
-    """
-    Converts labels such as:
-    Tomato___Early_blight
-    into:
-    crop = Tomato
-    condition = Early blight
-    """
-
     cleaned = str(label).strip()
 
     if "___" in cleaned:
@@ -190,14 +193,12 @@ async def predict(file: UploadFile = File(...)):
             detail="AI model is not ready. Please try again."
         )
 
-    # Validate content type
     if file.content_type not in ALLOWED_CONTENT_TYPES:
         raise HTTPException(
             status_code=400,
             detail="Upload a JPG, JPEG, PNG or WEBP image."
         )
 
-    # Read image with size limit
     image_bytes = await file.read(MAX_IMAGE_SIZE + 1)
 
     if not image_bytes:
@@ -212,12 +213,13 @@ async def predict(file: UploadFile = File(...)):
             detail="Image size must not exceed 10 MB."
         )
 
-    # Validate and open image
     try:
         image = Image.open(io.BytesIO(image_bytes))
         image.verify()
 
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        image = Image.open(
+            io.BytesIO(image_bytes)
+        ).convert("RGB")
 
     except (UnidentifiedImageError, OSError, ValueError):
         raise HTTPException(
@@ -226,7 +228,6 @@ async def predict(file: UploadFile = File(...)):
         )
 
     try:
-        # Preprocess image
         inputs = processor(
             images=image,
             return_tensors="pt"
@@ -237,15 +238,14 @@ async def predict(file: UploadFile = File(...)):
             for key, value in inputs.items()
         }
 
-        # Run AI prediction
         with torch.inference_mode():
             outputs = model(**inputs)
+
             probabilities = torch.softmax(
                 outputs.logits,
                 dim=-1
             )[0]
 
-        # Get top 3 predictions
         top_count = min(3, probabilities.shape[0])
 
         top_values, top_indices = torch.topk(
@@ -270,7 +270,6 @@ async def predict(file: UploadFile = File(...)):
                 "label": label
             })
 
-        # Best prediction
         best = top_predictions[0]
 
         crop = best["crop"]
@@ -283,7 +282,6 @@ async def predict(file: UploadFile = File(...)):
 
         message = get_basic_advice(condition)
 
-        # Return prediction
         return {
             "success": True,
             "crop": crop,
