@@ -40,6 +40,25 @@ const navigation = [
 const DEVICE_ID = "greenhouse-esp32-s3-01";
 const ONLINE_TIMEOUT_MS = 30000;
 
+type ControlMode = "AUTO" | "MANUAL";
+
+type DeviceCommands = {
+  device_id: string;
+  control_mode: ControlMode;
+  pump_on: boolean;
+  fan_on: boolean;
+  grow_light_on: boolean;
+  updated_at?: string;
+};
+
+const DEFAULT_COMMANDS: DeviceCommands = {
+  device_id: DEVICE_ID,
+  control_mode: "AUTO",
+  pump_on: false,
+  fan_on: false,
+  grow_light_on: false,
+};
+
 /* SIMULATION DATA GENERATOR
    These values are generated locally.
    They are not actual ESP32 sensor readings.
@@ -80,6 +99,9 @@ export default function Dashboard() {
   const [error, setError] = useState("");
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
   const [now, setNow] = useState(Date.now());
+  const [commands, setCommands] = useState<DeviceCommands>(DEFAULT_COMMANDS);
+  const [commandBusy, setCommandBusy] = useState(false);
+  const [commandMessage, setCommandMessage] = useState("");
 
   /* LOAD DATA ACCORDING TO MASTER MODE */
   const loadTelemetry = useCallback(async () => {
@@ -220,6 +242,96 @@ export default function Dashboard() {
 
     return age >= 0 && age <= ONLINE_TIMEOUT_MS;
   }, [data, now, simulationMode]);
+
+  /* LOAD AND UPDATE MANUAL DEVICE COMMANDS */
+  const loadDeviceCommands = useCallback(async () => {
+    if (simulationMode) return;
+
+    try {
+      const { data: row, error: queryError } = await supabase
+        .from("greenhouse_device_commands")
+        .select("device_id, control_mode, pump_on, fan_on, grow_light_on, updated_at")
+        .eq("device_id", DEVICE_ID)
+        .maybeSingle();
+
+      if (queryError) throw queryError;
+
+      if (row) {
+        setCommands(row as DeviceCommands);
+      } else {
+        const { data: created, error: insertError } = await supabase
+          .from("greenhouse_device_commands")
+          .upsert(DEFAULT_COMMANDS, { onConflict: "device_id" })
+          .select("device_id, control_mode, pump_on, fan_on, grow_light_on, updated_at")
+          .single();
+
+        if (insertError) throw insertError;
+        setCommands(created as DeviceCommands);
+      }
+      setCommandMessage("");
+    } catch (err) {
+      console.error("Device command loading error:", err);
+      setCommandMessage(err instanceof Error ? err.message : "Could not load device commands.");
+    }
+  }, [simulationMode]);
+
+  const updateDeviceCommands = async (changes: Partial<DeviceCommands>) => {
+    if (simulationMode) {
+      setCommandMessage("Switch to hardware mode to use manual controls.");
+      return;
+    }
+    if (!deviceOnline) {
+      setCommandMessage("ESP32 is offline. Reconnect it before sending commands.");
+      return;
+    }
+    if (commandBusy) return;
+
+    setCommandBusy(true);
+    setCommandMessage("");
+    try {
+      const updated: DeviceCommands = {
+        ...commands,
+        ...changes,
+        device_id: DEVICE_ID,
+        updated_at: new Date().toISOString(),
+      };
+
+      const { data: saved, error: saveError } = await supabase
+        .from("greenhouse_device_commands")
+        .upsert(updated, { onConflict: "device_id" })
+        .select("device_id, control_mode, pump_on, fan_on, grow_light_on, updated_at")
+        .single();
+
+      if (saveError) throw saveError;
+      setCommands(saved as DeviceCommands);
+      setCommandMessage("Command saved to Supabase. Waiting for ESP32 confirmation.");
+    } catch (err) {
+      console.error("Device command update error:", err);
+      setCommandMessage(err instanceof Error ? err.message : "Could not save device command.");
+    } finally {
+      setCommandBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (modeLoading || simulationMode) return;
+    void loadDeviceCommands();
+    const timer = window.setInterval(() => void loadDeviceCommands(), 3000);
+    return () => window.clearInterval(timer);
+  }, [modeLoading, simulationMode, loadDeviceCommands]);
+
+  const setEquipment = (key: "pump_on" | "fan_on" | "grow_light_on", value: boolean) => {
+    void updateDeviceCommands({ control_mode: "MANUAL", [key]: value });
+  };
+
+  const emergencyOff = () => {
+    void updateDeviceCommands({
+      control_mode: "MANUAL",
+      pump_on: false,
+      fan_on: false,
+      grow_light_on: false,
+    });
+  };
 
   const temperature = data?.temperature_c ?? null;
   const humidity = data?.humidity_percent ?? null;
@@ -639,70 +751,94 @@ export default function Dashboard() {
           </article>
         </section>
 
-        {/* DEVICE STATUS */}
+        {/* MANUAL DEVICE CONTROL */}
         <section className="gm-device-section">
           <div className="gm-section-heading">
             <div>
-              <h2>Device Status</h2>
-
-              <p>
-                {simulationMode
-                  ? "Simulated equipment states"
-                  : "Equipment states reported by your ESP32-S3"}
-              </p>
+              <h2>Manual Device Control</h2>
+              <p>Choose automatic or manual operation and control greenhouse equipment.</p>
             </div>
-
             <span className="gm-manual-label">
-              {simulationMode
-                ? "SIMULATED STATUS"
-                : "HARDWARE STATUS"}
+              {simulationMode ? "SIMULATION MODE" : deviceOnline ? "ESP32 ONLINE" : "ESP32 OFFLINE"}
             </span>
           </div>
 
-          <div className="gm-device-grid">
-            {[
-              {
-                name: "Water Pump",
-                description: "Irrigation system",
-                icon: "🚿",
-                value: data?.pump_on,
-              },
-              {
-                name: "Cooling Fan",
-                description: "Temperature control",
-                icon: "🌀",
-                value: data?.fan_on,
-              },
-              {
-                name: "Grow Light",
-                description: "Artificial lighting",
-                icon: "💡",
-                value: data?.grow_light_on,
-              },
-            ].map((device) => (
-              <article
-                className="gm-device-card"
-                key={device.name}
-              >
-                <span className="gm-device-icon">
-                  {device.icon}
-                </span>
-
-                <div className="gm-device-info">
-                  <strong>{device.name}</strong>
-                  <small>{device.description}</small>
-
-                  <span>
-                    {!deviceOnline || device.value === undefined
-                      ? "UNKNOWN"
-                      : device.value
-                      ? "ON"
-                      : "OFF"}
-                  </span>
+          {simulationMode ? (
+            <div className="gm-error">
+              Manual controls are disabled in simulation mode. Switch to hardware mode to send commands to your ESP32.
+            </div>
+          ) : (
+            <>
+              <div className="gm-panel" style={{ marginBottom: 18 }}>
+                <div className="gm-panel-heading">
+                  <div>
+                    <h3>Operating Mode</h3>
+                    <p>Automatic mode follows your firmware logic. Manual mode enables the controls below.</p>
+                  </div>
+                  <strong>{commands.control_mode}</strong>
                 </div>
-              </article>
-            ))}
-          </div>
+                <div className="gm-device-grid">
+                  <button
+                    type="button"
+                    className="gm-theme-button"
+                    disabled={!deviceOnline || commandBusy}
+                    aria-pressed={commands.control_mode === "AUTO"}
+                    onClick={() => void updateDeviceCommands({ control_mode: "AUTO" })}
+                  >
+                    🤖 {commands.control_mode === "AUTO" ? "AUTO ACTIVE" : "AUTO MODE"}
+                  </button>
+                  <button
+                    type="button"
+                    className="gm-theme-button"
+                    disabled={!deviceOnline || commandBusy}
+                    aria-pressed={commands.control_mode === "MANUAL"}
+                    onClick={() => void updateDeviceCommands({ control_mode: "MANUAL" })}
+                  >
+                    🎛️ {commands.control_mode === "MANUAL" ? "MANUAL ACTIVE" : "MANUAL MODE"}
+                  </button>
+                  <button
+                    type="button"
+                    className="gm-theme-button"
+                    disabled={!deviceOnline || commandBusy}
+                    onClick={emergencyOff}
+                  >
+                    🛑 EMERGENCY OFF
+                  </button>
+                </div>
+              </div>
+
+              <div className="gm-device-grid">
+                {([
+                  { name: "Water Pump", description: "Irrigation system", icon: "🚿", key: "pump_on" as const, actual: data?.pump_on },
+                  { name: "Cooling Fan", description: "Temperature control", icon: "🌀", key: "fan_on" as const, actual: data?.fan_on },
+                  { name: "Grow Light", description: "Plant lighting", icon: "💡", key: "grow_light_on" as const, actual: data?.grow_light_on },
+                ]).map((device) => (
+                  <article className="gm-device-card" key={device.key}>
+                    <span className="gm-device-icon">{device.icon}</span>
+                    <div className="gm-device-info">
+                      <strong>{device.name}</strong>
+                      <small>{device.description}</small>
+                      <span>ESP32 reported: {!deviceOnline || device.actual === undefined ? "UNKNOWN" : device.actual ? "ON" : "OFF"}</span>
+                      <span>Command: {commands[device.key] ? "ON" : "OFF"}</span>
+                    </div>
+                    <button
+                      type="button"
+                      className="gm-theme-button"
+                      disabled={!deviceOnline || commandBusy || commands.control_mode !== "MANUAL"}
+                      onClick={() => setEquipment(device.key, !commands[device.key])}
+                    >
+                      {commands[device.key] ? "TURN OFF" : "TURN ON"}
+                    </button>
+                  </article>
+                ))}
+              </div>
+
+              {commandBusy && <p className="gm-last-update">Saving command…</p>}
+              {commandMessage && <p className="gm-last-update" role="status">{commandMessage}</p>}
+              {!deviceOnline && <div className="gm-error">ESP32 is offline. Controls are disabled until fresh telemetry is received.</div>}
+              <p className="gm-last-update">“Command” is the requested state saved in Supabase. “ESP32 reported” is the latest state received from the hardware.</p>
+            </>
+          )}
         </section>
 
         {/* CONNECTIVITY AND ALERTS */}
